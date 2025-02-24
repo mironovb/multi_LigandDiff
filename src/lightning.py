@@ -14,8 +14,6 @@ from src.molecule_builder import BasicLigandMetrics, build_mol,extract_ligand_in
 from typing import Dict, List, Optional
 from torch_geometric.loader import DataLoader
 from torch_scatter import scatter_add
-import sys
-sys.path.append('/mnt/gs21/scratch/jinhongn/pyg/molSimplify')
 from molSimplify.Classes.mol3D import mol3D
 from molSimplify.Classes.ligand import ligand_breakdown
         
