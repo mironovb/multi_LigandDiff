@@ -6,8 +6,6 @@ from rdkit import Chem, Geometry
 from openbabel import openbabel
 from src import const
 import warnings
-import sys
-sys.path.append('/mnt/gs21/scratch/jinhongn/pyg/molSimplify')
 from molSimplify.Classes.mol3D import mol3D
 from molSimplify.Classes.ligand import ligand_breakdown
 
@@ -214,7 +212,7 @@ class BasicLigandMetrics(object):
         return connected
 
 
-def sanitycheck(positions, atom_types,metal,BondedOct=True):
+def sanitycheck(positions, atom_types,metal,BondedOct=False):
     """
     Using molsimplify to compute metrics of generated molecules
     Args:
@@ -245,21 +243,22 @@ def sublist_overlap(list1,list2):
     return lists
 
 
-def is_transition_metal(atom):
-    """define transition metals by their atomic number
+def is_metal(atom):
+    """define transition metals and lanthanides by their atomic number
 
     For the purpose of a motif in the template library of ligands, the
-    dummy atom `*` equally should be processed as if it were a transition
-    metal.  By convention, its atomic number is 0."""
+    dummy atom `*` equally should be processed as if it were a metal.
+    By convention, its atomic number is 0."""
     n = atom.GetAtomicNum()
     return (
         (n >= 22 and n <= 29)
         or (n >= 40 and n <= 47)
+        or (n >= 57 and n <= 71)
         or (n >= 72 and n <= 79)
         or (n == 0)
     )
 
-def reset_dative_bonds(mol, fromAtoms=(6, 7, 8, 15, 16)):  # i.e., C, N, O, P, S
+def reset_dative_bonds(mol, fromAtoms=(6, 7, 8, 9, 15, 16, 17, 35)):  # i.e., C, N, O, F, P, S, Cl, Br
     """edit some "dative bonds"
 
     Bonds between atoms of transition metals typical donor atoms will be marked
@@ -275,7 +274,7 @@ def reset_dative_bonds(mol, fromAtoms=(6, 7, 8, 15, 16)):  # i.e., C, N, O, P, S
     pt = Chem.GetPeriodicTable()
     rwmol = Chem.RWMol(mol)
     rwmol.UpdatePropertyCache(strict=False)
-    metals = [at for at in rwmol.GetAtoms() if is_transition_metal(at)]
+    metals = [at for at in rwmol.GetAtoms() if is_metal(at)]
     for metal in metals:
         for nbr in metal.GetNeighbors():
             if (

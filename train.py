@@ -7,6 +7,7 @@ import yaml
 
 from datetime import datetime
 from pytorch_lightning import Trainer, callbacks, loggers
+from src import const
 from src.const import NUMBER_OF_ATOM_TYPES
 from src.lightning import DDPM
 from src.utils import disable_rdkit_logging, Logger
@@ -50,7 +51,7 @@ def main(args):
     
     in_node_nf = NUMBER_OF_ATOM_TYPES
    
-    ligand_node_nf = 7 # 6 + 1 for ligand_group and coord_site
+    ligand_node_nf = const.MAX_LIGANDS + 1  # ligand_group(MAX_LIGANDS) + coord_site(1)
 
     ddpm = DDPM(
         data_path=args.data,

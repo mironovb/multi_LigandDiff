@@ -90,18 +90,18 @@ def parse_complex(filename):
 
     mol=mol3D()
     mol.readfromxyz(f'{tmp_file}.xyz')
-    liglist,ligdents,ligcon=ligand_breakdown(mol,silent=True,BondedOct=True)
+    liglist,ligdents,ligcon=ligand_breakdown(mol,silent=True,BondedOct=False)
     f_group=torch.zeros(num_atoms)
     for i in range(len(liglist)):
-        f_group[liglist[i]]=i+1   
+        f_group[liglist[i]]=i+1
 
-    ligand_group=torch.zeros((num_atoms,7) )
+    ligand_group=torch.zeros((num_atoms, const.MAX_LIGANDS + 1))
     ligand_group[range(len(f_group.long())),f_group.long()]=1
     
     anchor_group=torch.zeros(num_atoms)
     for i in range(len(ligcon)):
         anchor_group[ligcon[i]]=i+1
-    anchors_group=torch.zeros((num_atoms,7) )
+    anchors_group=torch.zeros((num_atoms, const.MAX_LIGANDS + 1))
     anchors_group[range(len(anchor_group.long())),anchor_group.long()]=1
     coord_site=anchors_group[:,1:].any(dim=1).to(torch.int)
     # list all combinations of ligands
@@ -143,7 +143,7 @@ def read_molecule(filename):
                 print(f'Metal is not located at the begining of the coordinates.The {filename} is rearranged and saved to {filename[:-4]}_re.xyz')
                 return parse_complex(f'{filename[:-4]}_re.xyz')
             else:
-                print('Metal is not found in the domain of top 20 metals in CSD, please add the metal to the list of metals in const.py')
+                print('Metal is not found in the supported metals list, please add the metal to the list of metals in const.py')
         else:
             return parse_complex(filename)
 
@@ -178,9 +178,13 @@ def reform_data(dataset,device,ligand_size='random'):
             LD_c.append(torch.sum(i['coord_site'][i['context'].squeeze()==1][item]).item())
         assert sum(LD_c)==cn_c 
         #coordination type of generated ligands,i.e,ligand denticity(LD_g)
-        #LD_g=const.cn_oct[cn_c][0]# max ligand denticity
-        # LD_g= random.choice(const.coordination_type[cn_c])
-        for LD_g in const.cn_oct[cn_c]:
+        # Determine target CN from total coordination sites
+        target_cn = int(torch.sum(i['coord_site']).item())
+        remaining = target_cn - cn_c
+        if remaining <= 0:
+            continue
+        ld_options = const.denticity_partitions(remaining)
+        for LD_g in ld_options:
             ligand_index=index[:len(LD_g)]
             gen_ligand_groups=[]
             gen_ligand_coord_sites=[]
@@ -190,7 +194,7 @@ def reform_data(dataset,device,ligand_size='random'):
                 else:
                     g_ligand_size=get_ligand_size(ligand_size,startnum=10,endnum=30)
                 assert g_ligand_size>= num_coord_site,"The assigned ligand size is smaller than the denticity of the generated ligand. Please assign a larger ligand size."
-                gen_ligand_group=torch.zeros(g_ligand_size,6)
+                gen_ligand_group=torch.zeros(g_ligand_size, const.MAX_LIGANDS)
                 gen_ligand_group[:,k]=1
                 gen_ligand_groups.append(gen_ligand_group)
                 gen_coord_site=torch.zeros(g_ligand_size)
@@ -207,7 +211,7 @@ def reform_data(dataset,device,ligand_size='random'):
             new_nuclear_charges=torch.cat([nuclear_charges,torch.zeros(gen_ligand_size)],dim=0)
             new_coord_site=torch.cat([c_coord_site,gen_ligand_coord_site],dim=0)
             assert new_x.shape[0]==new_nuclear_charges.shape[0]
-            assert torch.sum(new_coord_site).item()==6
+            assert torch.sum(new_coord_site).item() == target_cn, f"CN mismatch: expected {target_cn}, got {torch.sum(new_coord_site).item()}"
             new_ligand_group=torch.cat([ligand_group,gen_ligand_group],dim=0)
             new_onehot=torch.cat([one_hot,gen_ligand_onehot],dim=0)
             natoms=new_x.shape[0]
@@ -289,7 +293,7 @@ def add_H(org_xyz,gen_dir):
     os.makedirs(f'{gen_dir}/add_H', exist_ok=True)
     my_mol=mol3D()
     my_mol.readfromxyz(f'{org_xyz}')
-    liglist,ligdents,ligcon=ligand_breakdown(my_mol,silent=True,BondedOct=True)
+    liglist,ligdents,ligcon=ligand_breakdown(my_mol,silent=True,BondedOct=False)
 
     with open(f'{org_xyz}','r+') as f:
         lines=f.readlines()
@@ -323,7 +327,7 @@ def add_H(org_xyz,gen_dir):
         # add H atoms to heavy atoms in context
         my_mol=mol3D()
         my_mol.readfromxyz(f'{gen_dir}/noH/{gen_xyz}')
-        liglist,ligdents,ligcon=ligand_breakdown(my_mol,silent=True,BondedOct=True)
+        liglist,ligdents,ligcon=ligand_breakdown(my_mol,silent=True,BondedOct=False)
         h_atoms=[]
         with open(f'{gen_dir}/noH/{gen_xyz}','r+') as f:
             lines=f.readlines()

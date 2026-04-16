@@ -89,7 +89,7 @@ def main(model,outdir,dataset,batch_size=64,ligand_size='random'):
                         write_xyz_file(positions, atom_types, tmp_file,metal,n_fragment='nan')
                         mol=mol3D()
                         mol.readfromxyz(f'{tmp_file}.xyz')
-                        liglist,ligdent,ligcon=ligand_breakdown(mol,silent=True,BondedOct=True)
+                        liglist,ligdent,ligcon=ligand_breakdown(mol,silent=True,BondedOct=False)
                     
                     LD_c=ast.literal_eval(labels[i].split('_')[-2])
                     LD_g=ast.literal_eval(labels[i].split('_')[-1])

@@ -6,19 +6,21 @@ from rdkit import Chem
 TORCH_FLOAT = torch.float32
 TORCH_INT = torch.int8
 
+MAX_LIGANDS = 10
+
 
 # Atom idx for one-hot encoding
 ATOM2IDX = {'C': 0, 'N': 1, 'O': 2, 'S': 3, 'Br': 4, 'Cl': 5, 'P': 6, 'F': 7}
 IDX2ATOM = {0: 'C', 1: 'N', 2: 'O', 3: 'S', 4: 'Br', 5: 'Cl', 6: 'P', 7: 'F'}
 
 #top 20 metals in CSD, add any other metal below
-metals2idx={'Ti':22,'V':23,'Cr':24,'Mn':25,'Fe':26,'Co':27,'Ni':28,'Cu':29,'Zn':30,'Zr':40,'Mo':42,'Ru':44,'Rh':45,'Pd':46,'Cd':48,'W':74,'Re':75,'Os':76,'Ir':77,'Pt':78}
-idx2metals={22:'Ti',23:'V',24:'Cr',25:'Mn',26:'Fe',27:'Co',28:'Ni',29:'Cu',30:'Zn',40:'Zr',42:'Mo',44:'Ru',45:'Rh',46:'Pd',48:'Cd',74:'W',75:'Re',76:'Os',77:'Ir',78:'Pt'}
-metals=['Ti','V','Cr','Mn','Fe','Co','Ni','Cu','Zn','Zr','Mo','Ru','Rh','Pd','Cd','W','Re','Os','Ir','Pt']
+metals2idx={'Ti':22,'V':23,'Cr':24,'Mn':25,'Fe':26,'Co':27,'Ni':28,'Cu':29,'Zn':30,'Zr':40,'Mo':42,'Ru':44,'Rh':45,'Pd':46,'Cd':48,'La':57,'Ce':58,'Pr':59,'Nd':60,'Sm':62,'Eu':63,'Gd':64,'Tb':65,'Dy':66,'Ho':67,'Er':68,'Tm':69,'Yb':70,'Lu':71,'W':74,'Re':75,'Os':76,'Ir':77,'Pt':78}
+idx2metals={22:'Ti',23:'V',24:'Cr',25:'Mn',26:'Fe',27:'Co',28:'Ni',29:'Cu',30:'Zn',40:'Zr',42:'Mo',44:'Ru',45:'Rh',46:'Pd',48:'Cd',57:'La',58:'Ce',59:'Pr',60:'Nd',62:'Sm',63:'Eu',64:'Gd',65:'Tb',66:'Dy',67:'Ho',68:'Er',69:'Tm',70:'Yb',71:'Lu',74:'W',75:'Re',76:'Os',77:'Ir',78:'Pt'}
+metals=['Ti','V','Cr','Mn','Fe','Co','Ni','Cu','Zn','Zr','Mo','Ru','Rh','Pd','Cd','La','Ce','Pr','Nd','Sm','Eu','Gd','Tb','Dy','Ho','Er','Tm','Yb','Lu','W','Re','Os','Ir','Pt']
 
 
 CHARGES = {'C':6,'N':7,'O':8,'F':9,'P':15,'S':16,'Cl':17,'Br': 35,
-            'Ti':22,'V':23,'Cr':24,'Mn':25,'Fe':26,'Co':27,'Ni':28,'Cu':29,'Zn':30,'Zr':40,'Mo':42,'Ru':44,'Rh':45,'Pd':46,'Cd':48,'W':74,'Re':75,'Os':76,'Ir':77,'Pt':78}
+            'Ti':22,'V':23,'Cr':24,'Mn':25,'Fe':26,'Co':27,'Ni':28,'Cu':29,'Zn':30,'Zr':40,'Mo':42,'Ru':44,'Rh':45,'Pd':46,'Cd':48,'La':57,'Ce':58,'Pr':59,'Nd':60,'Sm':62,'Eu':63,'Gd':64,'Tb':65,'Dy':66,'Ho':67,'Er':68,'Tm':69,'Yb':70,'Lu':71,'W':74,'Re':75,'Os':76,'Ir':77,'Pt':78}
 
 # One-hot atom types
 NUMBER_OF_ATOM_TYPES = len(ATOM2IDX)
@@ -223,5 +225,22 @@ MARGINS_EDM = [10, 5, 2]
 
 COLORS = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8','C9','C10']
 RADII = [0.77, 0.77, 0.77, 0.77, 0.77, 0.77, 0.77, 0.77, 0.77,0.77,0.77]
+
+
+def denticity_partitions(remaining_cn, max_denticity=10):
+    """Generate all integer partitions of remaining_cn into parts <= max_denticity, sorted descending.
+
+    This replaces the hardcoded cn_oct and cn_nonoct dicts for arbitrary CN.
+    Example: denticity_partitions(4) returns [[4], [3,1], [2,2], [2,1,1], [1,1,1,1]]
+    """
+    def _partitions(n, max_part):
+        if n == 0:
+            yield []
+            return
+        for part in range(min(n, max_part), 0, -1):
+            for rest in _partitions(n - part, part):
+                yield [part] + rest
+
+    return list(_partitions(remaining_cn, min(max_denticity, remaining_cn)))
 
 

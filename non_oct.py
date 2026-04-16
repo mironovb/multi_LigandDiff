@@ -51,9 +51,13 @@ def reform_data(dataset,device,ligand_size='random'):
         for item in ligand_slices:
             item=[i+1 for i in item]
             LD_c.append(torch.sum(i['coord_site'][i['context'].squeeze()==1][item]).item())
-        assert sum(LD_c)==cn_c 
-        if 0<=cn_c<5:
-            for LD_g in const.cn_nonoct[cn_c]:
+        assert sum(LD_c)==cn_c
+        target_cn = int(torch.sum(i['coord_site']).item())
+        if 0 <= cn_c < target_cn:
+            remaining = target_cn - cn_c
+            if remaining <= 0:
+                continue
+            for LD_g in const.denticity_partitions(remaining):
                 ligand_index=index[:len(LD_g)]
                 gen_ligand_groups=[]
                 gen_ligand_coord_sites=[]
@@ -63,7 +67,7 @@ def reform_data(dataset,device,ligand_size='random'):
                     else:
                         g_ligand_size=get_ligand_size(ligand_size,startnum=10,endnum=30)
                     assert g_ligand_size>= num_coord_site,"The assigned ligand size is smaller than the denticity of the generated ligand. Please assign a larger ligand size."
-                    gen_ligand_group=torch.zeros(g_ligand_size,6)
+                    gen_ligand_group=torch.zeros(g_ligand_size, const.MAX_LIGANDS)
                     gen_ligand_group[:,k]=1
                     gen_ligand_groups.append(gen_ligand_group)
                     gen_coord_site=torch.zeros(g_ligand_size)

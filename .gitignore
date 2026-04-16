@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Data files (large)
+data/*.pt
+data/*.pkl
+cif_output/
+results_v2/
+*.tar.gz
+
+# Model checkpoints (large)
+model/*.ckpt
+models/
+
+# Generated outputs
+generate/
+generate_*/
+
+# Logs
+logs/
+*.log
+*.out
+*.err
+slurm-*.out
+
+# macOS
+.DS_Store
+._*
+
+# IDE
+.vscode/
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Conda/venv
+.conda/
+venv/
+env/
+
+# Temp files
+*.tmp
+*.swp
+*~
+
+prompts/
+run_fixes.sh
+run_prompts.sh
+
+# sed backup files
+*.bak

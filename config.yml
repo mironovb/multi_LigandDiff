@@ -36,6 +36,9 @@ clip_grad: False
 
 drop_rate: 0.2
 
+max_ligands: 10
+# Note: ligand_node_nf = max_ligands + 1 = 11
+
 
 
 
