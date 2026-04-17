@@ -145,8 +145,8 @@ def main():
     parser.add_argument('--lr_head', type=float, default=1e-4)
     parser.add_argument('--lr_backbone', type=float, default=1e-5)
     parser.add_argument('--device', type=str, default='gpu')
-    parser.add_argument('--hidden_nf', type=int, default=128)
-    parser.add_argument('--n_layers', type=int, default=6)
+    parser.add_argument('--hidden_nf', type=int, default=192)
+    parser.add_argument('--n_layers', type=int, default=5)
     parser.add_argument('--attention', type=eval, default=True)
     parser.add_argument('--diffusion_steps', type=int, default=500)
     parser.add_argument('--wandb_entity', type=str, default='geometric')
@@ -186,7 +186,7 @@ def main():
         attention=args.attention,
         normalization_factor=1,
         normalize_factors=[10, 4, 1],
-        drop_rate=0.0,
+        drop_rate=0.2,
         diffusion_steps=args.diffusion_steps,
         diffusion_noise_schedule='polynomial_2',
         diffusion_noise_precision=1e-5,
@@ -259,7 +259,6 @@ def main():
         accelerator=args.device,
         devices=args.num_gpus,
         strategy='ddp' if args.num_gpus > 1 else 'auto',
-        gradient_clip_val=1.0,
         num_sanity_val_steps=0,
         enable_progress_bar=True,
     )
