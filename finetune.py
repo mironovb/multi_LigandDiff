@@ -157,6 +157,10 @@ def main():
                         help='Stop if val loss does not improve for N epochs')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
+    parser.add_argument('--resume_from_checkpoint', type=str, default=None,
+                        help='Path to Lightning checkpoint to resume training from. '
+                             'When set, skips pretrained weight loading entirely and '
+                             'continues from the saved epoch/optimizer state.')
     args = parser.parse_args()
 
     pl.seed_everything(args.seed)
@@ -201,30 +205,36 @@ def main():
         clip_grad=True,
     )
 
-    # ---- Load pretrained weights ----------------------------------------
-    padded_names = load_pretrained_weights(ddpm, args.pretrained)
+    if args.resume_from_checkpoint:
+        print(f"Resuming from checkpoint: {args.resume_from_checkpoint}")
+        print("Skipping pretrained weight loading and param group setup.")
+        # Model weights, optimizer state, scheduler state, and epoch count
+        # will all be restored by Lightning from the checkpoint.
+    else:
+        # ---- Load pretrained weights ------------------------------------
+        padded_names = load_pretrained_weights(ddpm, args.pretrained)
 
-    # ---- Discriminative learning rates ----------------------------------
-    param_groups = build_param_groups(
-        ddpm, padded_names, args.lr_head, args.lr_backbone)
+        # ---- Discriminative learning rates ------------------------------
+        param_groups = build_param_groups(
+            ddpm, padded_names, args.lr_head, args.lr_backbone)
 
-    # Override the default optimizer so we can use per-group LRs.
-    def _configure_optimizers(self_ignored=None):
-        optimizer = torch.optim.AdamW(param_groups, amsgrad=True, weight_decay=1e-6)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=args.epochs,
-            eta_min=1e-7,
-        )
-        return {
-            'optimizer': optimizer,
-            'lr_scheduler': {
-                'scheduler': scheduler,
-                'interval': 'epoch',
-            },
-        }
+        # Override the default optimizer so we can use per-group LRs.
+        def _configure_optimizers(self_ignored=None):
+            optimizer = torch.optim.AdamW(param_groups, amsgrad=True, weight_decay=1e-6)
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=args.epochs,
+                eta_min=1e-7,
+            )
+            return {
+                'optimizer': optimizer,
+                'lr_scheduler': {
+                    'scheduler': scheduler,
+                    'interval': 'epoch',
+                },
+            }
 
-    ddpm.configure_optimizers = _configure_optimizers
+        ddpm.configure_optimizers = _configure_optimizers
 
     # ---- Trainer --------------------------------------------------------
     checkpoint_callback = callbacks.ModelCheckpoint(
@@ -269,7 +279,10 @@ def main():
     print(f"  Pretrained: {args.pretrained}")
     print(f"  Output:     {args.output_dir}")
 
-    trainer.fit(model=ddpm)
+    if args.resume_from_checkpoint:
+        trainer.fit(model=ddpm, ckpt_path=args.resume_from_checkpoint)
+    else:
+        trainer.fit(model=ddpm)
 
 
 if __name__ == '__main__':
