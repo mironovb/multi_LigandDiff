@@ -231,7 +231,7 @@ def sanitycheck(positions, atom_types,metal,BondedOct=False):
     mol=mol3D()
     mol.readfromxyz(f'{tmp_file}.xyz')
     overlapping=mol.sanitycheck(silence=True)[0]
-    liglist,ligdents,ligcon=ligand_breakdown(mol,silent=True,BondedOct=BondedOct)
+    liglist,ligdents,ligcon=ligand_breakdown(mol,silent=True,BondedOct=BondedOct,transition_metals_only=False)
     return overlapping,liglist
     
 

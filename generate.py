@@ -90,7 +90,7 @@ def parse_complex(filename):
 
     mol=mol3D()
     mol.readfromxyz(f'{tmp_file}.xyz')
-    liglist,ligdents,ligcon=ligand_breakdown(mol,silent=True,BondedOct=False)
+    liglist,ligdents,ligcon=ligand_breakdown(mol,silent=True,BondedOct=False,transition_metals_only=False)
     f_group=torch.zeros(num_atoms)
     for i in range(len(liglist)):
         f_group[liglist[i]]=i+1
@@ -265,7 +265,7 @@ def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes'
                     #     write_xyz_file(positions, atom_types, tmp_file,metal,n_fragment='nan')
                     #     mol=mol3D()
                     #     mol.readfromxyz(f'{tmp_file}.xyz')
-                    #     liglist,ligdent,ligcon=ligand_breakdown(mol,silent=True,BondedOct=False)
+                    #     liglist,ligdent,ligcon=ligand_breakdown(mol,silent=True,BondedOct=False,transition_metals_only=False)
                     
                     # LD_c=ast.literal_eval(labels[i].split('_')[-2])
                     # LD_g=ast.literal_eval(labels[i].split('_')[-1])
@@ -293,7 +293,7 @@ def add_H(org_xyz,gen_dir):
     os.makedirs(f'{gen_dir}/add_H', exist_ok=True)
     my_mol=mol3D()
     my_mol.readfromxyz(f'{org_xyz}')
-    liglist,ligdents,ligcon=ligand_breakdown(my_mol,silent=True,BondedOct=False)
+    liglist,ligdents,ligcon=ligand_breakdown(my_mol,silent=True,BondedOct=False,transition_metals_only=False)
 
     with open(f'{org_xyz}','r+') as f:
         lines=f.readlines()
@@ -327,7 +327,7 @@ def add_H(org_xyz,gen_dir):
         # add H atoms to heavy atoms in context
         my_mol=mol3D()
         my_mol.readfromxyz(f'{gen_dir}/noH/{gen_xyz}')
-        liglist,ligdents,ligcon=ligand_breakdown(my_mol,silent=True,BondedOct=False)
+        liglist,ligdents,ligcon=ligand_breakdown(my_mol,silent=True,BondedOct=False,transition_metals_only=False)
         h_atoms=[]
         with open(f'{gen_dir}/noH/{gen_xyz}','r+') as f:
             lines=f.readlines()
