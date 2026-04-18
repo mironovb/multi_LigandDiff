@@ -90,6 +90,17 @@ def load_pretrained_weights(model, checkpoint_path):
     return {p.split(' [')[0] for p in padded}
 
 
+# Layer names that load_pretrained_weights() pads when adapting the
+# pretrained CN=6 checkpoint (ligand_node_nf=7) to Ln (ligand_node_nf=11).
+# Stable across runs because they are determined by the architecture diff,
+# not by checkpoint contents — used on resume when we don't rerun loading.
+KNOWN_PADDED_LAYERS = {
+    'edm.dynamics.ligand_site_embedding.weight',
+    'edm.dynamics.h_embedding_out.weight',
+    'edm.dynamics.h_embedding_out.bias',
+}
+
+
 # ---------------------------------------------------------------------------
 # Discriminative learning-rate groups
 # ---------------------------------------------------------------------------
@@ -207,34 +218,38 @@ def main():
 
     if args.resume_from_checkpoint:
         print(f"Resuming from checkpoint: {args.resume_from_checkpoint}")
-        print("Skipping pretrained weight loading and param group setup.")
-        # Model weights, optimizer state, scheduler state, and epoch count
-        # will all be restored by Lightning from the checkpoint.
+        print("Skipping pretrained weight loading (Lightning will restore from checkpoint).")
+        # Lightning restores model weights, optimizer state, scheduler state,
+        # and epoch count from the checkpoint. We still need to rebuild the
+        # 2-group optimizer structure so its shape matches the saved state.
+        padded_names = KNOWN_PADDED_LAYERS
     else:
         # ---- Load pretrained weights ------------------------------------
         padded_names = load_pretrained_weights(ddpm, args.pretrained)
 
-        # ---- Discriminative learning rates ------------------------------
-        param_groups = build_param_groups(
-            ddpm, padded_names, args.lr_head, args.lr_backbone)
+    # ---- Discriminative learning rates ----------------------------------
+    # Always build 2 param groups so the optimizer structure matches what
+    # the checkpoint expects on resume.
+    param_groups = build_param_groups(
+        ddpm, padded_names, args.lr_head, args.lr_backbone)
 
-        # Override the default optimizer so we can use per-group LRs.
-        def _configure_optimizers(self_ignored=None):
-            optimizer = torch.optim.AdamW(param_groups, amsgrad=True, weight_decay=1e-6)
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer,
-                T_max=args.epochs,
-                eta_min=1e-7,
-            )
-            return {
-                'optimizer': optimizer,
-                'lr_scheduler': {
-                    'scheduler': scheduler,
-                    'interval': 'epoch',
-                },
-            }
+    # Override the default optimizer so we can use per-group LRs.
+    def _configure_optimizers(self_ignored=None):
+        optimizer = torch.optim.AdamW(param_groups, amsgrad=True, weight_decay=1e-6)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=args.epochs,
+            eta_min=1e-7,
+        )
+        return {
+            'optimizer': optimizer,
+            'lr_scheduler': {
+                'scheduler': scheduler,
+                'interval': 'epoch',
+            },
+        }
 
-        ddpm.configure_optimizers = _configure_optimizers
+    ddpm.configure_optimizers = _configure_optimizers
 
     # ---- Trainer --------------------------------------------------------
     checkpoint_callback = callbacks.ModelCheckpoint(
