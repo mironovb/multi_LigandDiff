@@ -331,7 +331,7 @@ class DDPM(pl.LightningModule):
         print(metrics)
         return metrics               
 
-    def sample_chain(self, data,  keep_frames=None):
+    def sample_chain(self, data,  keep_frames=None, resample_r=1):
 
         x = data['pos']
         h = data['one_hot']
@@ -345,7 +345,7 @@ class DDPM(pl.LightningModule):
 
         if self.center_of_mass == 'context':
             x= utils.remove_partial_mean_with_mask(x,context,batch_seg)
-        
+
         chain = self.edm.sample_chain(
             x=x,
             h=h,
@@ -354,9 +354,10 @@ class DDPM(pl.LightningModule):
             batch_seg=batch_seg,
             batch_size=batch_size,
             ligand_site=ligand_site,
-            keep_frames=keep_frames)
-        
-        return chain 
+            keep_frames=keep_frames,
+            resample_r=resample_r)
+
+        return chain
 
     def configure_optimizers(self):
         return torch.optim.AdamW(self.edm.parameters(), lr=self.lr, amsgrad=True, weight_decay=1e-6)

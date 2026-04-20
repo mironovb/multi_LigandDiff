@@ -27,9 +27,11 @@ parser.add_argument('--batch_size', type=int, default=64)
 parser.add_argument('--n_samples', type=int, default=1)
 parser.add_argument('--ligand_sizes', type=str, default='random')
 parser.add_argument('--add_Hs', type=eval, default=False)
+parser.add_argument('--resample_r', type=int, default=1,
+                    help='RePaint resampling iterations per timestep (1=standard, 10=recommended)')
 
 
-atom2idx=const.ATOM2IDX 
+atom2idx=const.ATOM2IDX
 idx2atom=const.IDX2ATOM 
 charges=const.CHARGES
 num_atom_types=const.NUMBER_OF_ATOM_TYPES
@@ -216,7 +218,7 @@ def reform_data(dataset,device,ligand_size='random'):
     #new_data=[item for item in new_data for _ in range(2)]
     return new_data
 
-def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes'):
+def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes',resample_r=1):
     os.makedirs(f'{outdir}/noH', exist_ok=True)
     ddpm = DDPM.load_from_checkpoint(model, map_location=device).eval().to(device)
     dataloader = DataLoader(data, batch_size=batch_size, shuffle=False)
@@ -233,7 +235,7 @@ def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes'
         labels=data['label']
         
         try:
-            chain_batch = ddpm.sample_chain(data, keep_frames=100)
+            chain_batch = ddpm.sample_chain(data, keep_frames=100, resample_r=resample_r)
         except utils.FoundNaNException as e:
             continue
 
@@ -387,7 +389,7 @@ def add_H(org_xyz,gen_dir):
 
 
 
-def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add_Hs=False):
+def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add_Hs=False,resample_r=1):
     """
     Generate multiple new structures for each variation in a given complex
     Args:
@@ -402,18 +404,15 @@ def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add
     print(f'{len(dataset)} samples will be generated')
     data=reform_data(dataset,device,ligand_size=ligand_size)
     batch_size=min(batch_size,len(data))
-    generate_ligand(data,model,device,batch_size,outdir=outdir)
+    generate_ligand(data,model,device,batch_size,outdir=outdir,resample_r=resample_r)
     if add_Hs:
         add_H(complex,outdir)
     print('Done!')
-    
-
-        
 
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    main(args.outdir,args.model,args.complex,args.batch_size,args.n_samples,args.ligand_sizes,args.add_Hs)
+    main(args.outdir,args.model,args.complex,args.batch_size,args.n_samples,args.ligand_sizes,args.add_Hs,args.resample_r)
 
     
 

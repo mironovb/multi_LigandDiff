@@ -121,11 +121,11 @@ class EDM(torch.nn.Module):
 
 
     @torch.no_grad()
-    def sample_chain(self, x, h, context, ligand_diff, batch_seg,batch_size, ligand_site, keep_frames=None,timesteps=None):
+    def sample_chain(self, x, h, context, ligand_diff, batch_seg,batch_size, ligand_site, keep_frames=None,timesteps=None, resample_r=1):
         timesteps = self.T if timesteps is None else timesteps
         assert 0 < keep_frames <= timesteps
         assert timesteps % keep_frames == 0
-        
+
         x, h, = self.normalize(x, h)
         xh = torch.cat([x, h], dim=1)
         #ligand_site = (ligand_site.float() - self.norm_biases[2]) / self.norm_values[2]
@@ -137,25 +137,40 @@ class EDM(torch.nn.Module):
         sigma=torch.ones((batch_size,1),device=x.device)
         z=self.sample_normal(mu_xh,ligand_diff,sigma,batch_seg)
         z=xh*context+z*ligand_diff
-    
+
         chain = torch.zeros((keep_frames,) + z.size(), device=z.device)
 
-        # Sample p(z_s | z_t)
-        
+        # Sample p(z_s | z_t) with RePaint resampling (Lugmayr et al. CVPR 2022)
+
         for s in reversed(range(0, timesteps)):
             s_array = torch.full((batch_size, 1), fill_value=s, device=z.device)
             t_array = s_array + 1
             s_array = s_array / timesteps
             t_array = t_array / timesteps
-            z = self.sample_p_zs_given_zt_only_ligand_diff(
-                s=s_array,
-                t=t_array,
-                z_t=z,
-                context=context,
-                ligand_diff=ligand_diff,
-                batch_seg=batch_seg,
-                ligand_site=ligand_site,
-            )
+
+            for u in range(resample_r):
+                # Denoise: z_t -> z_s
+                z = self.sample_p_zs_given_zt_only_ligand_diff(
+                    s=s_array,
+                    t=t_array,
+                    z_t=z,
+                    context=context,
+                    ligand_diff=ligand_diff,
+                    batch_seg=batch_seg,
+                    ligand_site=ligand_site,
+                )
+                # Re-noise back to level t (unless last iteration)
+                if u < resample_r - 1:
+                    gamma_s = self.gamma(s_array)
+                    gamma_t = self.gamma(t_array)
+                    _, sigma_t_given_s, alpha_t_given_s = \
+                        self.sigma_and_alpha_t_given_s(gamma_t, gamma_s)
+                    eps = self.sample_combined_position_feature_noise(
+                        z, ligand_diff)
+                    z_renoise = (alpha_t_given_s[batch_seg] * z
+                                 + sigma_t_given_s[batch_seg] * eps)
+                    z = z * context + z_renoise * ligand_diff
+
             if (s*keep_frames) % self.T==0:
                 write_index = (s * keep_frames) // self.T
                 chain[write_index] = self.unnormalize_z(z)
