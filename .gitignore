@@ -48,3 +48,12 @@ eu_tmma_cis.cif
 # Single-structure test files
 PEQNAB01_comp_1.xyz
 test_complex.xyz
+
+# Mac local files (not needed in repo)
+*.mac_backup
+logs/
+prompts/
+*.sh
+2296300.mol2
+ref0026_Z63_Eu_ox3_CN9_nlig4_dent2_b5947fd94113.xyz
+233_15_eu_tbma_noH_*.xyz
