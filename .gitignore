@@ -15,6 +15,9 @@ generated/
 xtb_opt/*/
 !xtb_opt/summary.json
 
+# xTB pipeline results (large; scripts are committed, outputs are not)
+xtb_results/
+
 # Download bundles
 for_download/
 full_download/

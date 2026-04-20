@@ -29,6 +29,12 @@ parser.add_argument('--ligand_sizes', type=str, default='random')
 parser.add_argument('--add_Hs', type=eval, default=False)
 parser.add_argument('--resample_r', type=int, default=1,
                     help='RePaint resampling iterations per timestep (1=standard, 10=recommended)')
+parser.add_argument('--project_enabled', type=eval, default=False,
+                    help='Enable hard exclusion-shell projection during sampling')
+parser.add_argument('--d_min_start', type=float, default=1.5,
+                    help='Exclusion shell d_min at high noise (start of reverse)')
+parser.add_argument('--d_min_end', type=float, default=1.3,
+                    help='Exclusion shell d_min at low noise (end of reverse)')
 
 
 atom2idx=const.ATOM2IDX
@@ -218,7 +224,8 @@ def reform_data(dataset,device,ligand_size='random'):
     #new_data=[item for item in new_data for _ in range(2)]
     return new_data
 
-def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes',resample_r=1):
+def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes',resample_r=1,
+                    project_enabled=False,d_min_start=1.5,d_min_end=1.3):
     os.makedirs(f'{outdir}/noH', exist_ok=True)
     ddpm = DDPM.load_from_checkpoint(model, map_location=device).eval().to(device)
     dataloader = DataLoader(data, batch_size=batch_size, shuffle=False)
@@ -235,7 +242,9 @@ def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes'
         labels=data['label']
         
         try:
-            chain_batch = ddpm.sample_chain(data, keep_frames=100, resample_r=resample_r)
+            chain_batch = ddpm.sample_chain(data, keep_frames=100, resample_r=resample_r,
+                                              project_enabled=project_enabled,
+                                              d_min_start=d_min_start, d_min_end=d_min_end)
         except utils.FoundNaNException as e:
             continue
 
@@ -389,7 +398,8 @@ def add_H(org_xyz,gen_dir):
 
 
 
-def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add_Hs=False,resample_r=1):
+def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add_Hs=False,resample_r=1,
+         project_enabled=False,d_min_start=1.5,d_min_end=1.3):
     """
     Generate multiple new structures for each variation in a given complex
     Args:
@@ -404,7 +414,8 @@ def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add
     print(f'{len(dataset)} samples will be generated')
     data=reform_data(dataset,device,ligand_size=ligand_size)
     batch_size=min(batch_size,len(data))
-    generate_ligand(data,model,device,batch_size,outdir=outdir,resample_r=resample_r)
+    generate_ligand(data,model,device,batch_size,outdir=outdir,resample_r=resample_r,
+                    project_enabled=project_enabled,d_min_start=d_min_start,d_min_end=d_min_end)
     if add_Hs:
         add_H(complex,outdir)
     print('Done!')
@@ -412,7 +423,8 @@ def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    main(args.outdir,args.model,args.complex,args.batch_size,args.n_samples,args.ligand_sizes,args.add_Hs,args.resample_r)
+    main(args.outdir,args.model,args.complex,args.batch_size,args.n_samples,args.ligand_sizes,args.add_Hs,args.resample_r,
+         args.project_enabled,args.d_min_start,args.d_min_end)
 
     
 
