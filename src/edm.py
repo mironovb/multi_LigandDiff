@@ -5,6 +5,7 @@ import math
 from torch_scatter import scatter_add
 from src import utils
 from src.egnn import Dynamics
+from src.projection import project_exclusion_shell, d_min_schedule
 from src.noise import GammaNetwork, PredefinedNoiseSchedule
 from typing import Union
 
@@ -121,7 +122,8 @@ class EDM(torch.nn.Module):
 
 
     @torch.no_grad()
-    def sample_chain(self, x, h, context, ligand_diff, batch_seg,batch_size, ligand_site, keep_frames=None,timesteps=None, resample_r=1):
+    def sample_chain(self, x, h, context, ligand_diff, batch_seg,batch_size, ligand_site, keep_frames=None,timesteps=None, resample_r=1,
+                     project_enabled=False, ligand_group=None, d_min_start=1.5, d_min_end=1.3):
         timesteps = self.T if timesteps is None else timesteps
         assert 0 < keep_frames <= timesteps
         assert timesteps % keep_frames == 0
@@ -159,6 +161,17 @@ class EDM(torch.nn.Module):
                     batch_seg=batch_seg,
                     ligand_site=ligand_site,
                 )
+                # Hard exclusion-shell projection (Christopher et al. 2024)
+                if project_enabled and ligand_group is not None:
+                    cur_d_min = d_min_schedule(s, timesteps, d_min_start, d_min_end)
+                    z_pos = z[:, :self.n_dims]
+                    z_pos_proj = project_exclusion_shell(
+                        z_pos, ligand_group, context, cur_d_min)
+                    # Only update generated atom positions
+                    z = torch.cat([
+                        z_pos * context + z_pos_proj * ligand_diff,
+                        z[:, self.n_dims:]
+                    ], dim=1)
                 # Re-noise back to level t (unless last iteration)
                 if u < resample_r - 1:
                     gamma_s = self.gamma(s_array)
