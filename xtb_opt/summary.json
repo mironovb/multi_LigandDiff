@@ -1,0 +1,51 @@
+[
+  {
+    "name": "125_20_eu_tmma_cis_[2, 2, 2, 2]_[2]",
+    "success": true,
+    "energy_hartree": -89.801118354907,
+    "opt_xyz": "xtb_opt/125_20_eu_tmma_cis_[2, 2, 2, 2]_[2]/xtbopt.xyz",
+    "error": null
+  },
+  {
+    "name": "130_20_eu_tmma_cis_[2, 2, 2, 2]_[2]",
+    "success": true,
+    "energy_hartree": -80.861927116372,
+    "opt_xyz": "xtb_opt/130_20_eu_tmma_cis_[2, 2, 2, 2]_[2]/xtbopt.xyz",
+    "error": null
+  },
+  {
+    "name": "155_20_eu_tmma_cis_[2, 2, 2, 2]_[2]",
+    "success": false,
+    "energy_hartree": null,
+    "opt_xyz": null,
+    "error": "abnormal termination of xtb\nNote: The following floating-point exceptions are signalling: IEEE_INVALID_FLAG IEEE_DIVIDE_BY_ZERO IEEE_OVERFLOW_FLAG IEEE_UNDERFLOW_FLAG IEEE_DENORMAL\nERROR STOP \n\nError termination. Backtrace:\n#0  0x565313234926 in ???\n#1  0x565313162ec4 in ???\n#2  0x56531314f272 in ???\n#3  0x14d0c4c8a7e4 in ???\n#4  0x56531314f316 in ???\n#5  0xffffffffffffffff in ???\n"
+  },
+  {
+    "name": "27_30_eu_tmma_cis_[2, 2, 2, 2]_[2]",
+    "success": false,
+    "energy_hartree": null,
+    "opt_xyz": null,
+    "error": "abnormal termination of xtb\nNote: The following floating-point exceptions are signalling: IEEE_INVALID_FLAG IEEE_DIVIDE_BY_ZERO IEEE_OVERFLOW_FLAG IEEE_UNDERFLOW_FLAG IEEE_DENORMAL\nERROR STOP \n\nError termination. Backtrace:\n#0  0x562da0fdf926 in ???\n#1  0x562da0f0dec4 in ???\n#2  0x562da0efa272 in ???\n#3  0x1481bd4d27e4 in ???\n#4  0x562da0efa316 in ???\n#5  0xffffffffffffffff in ???\n"
+  },
+  {
+    "name": "29_22_eu_tmma_cis_[2, 2, 2, 2]_[2]",
+    "success": true,
+    "energy_hartree": -85.227455590472,
+    "opt_xyz": "xtb_opt/29_22_eu_tmma_cis_[2, 2, 2, 2]_[2]/xtbopt.xyz",
+    "error": null
+  },
+  {
+    "name": "85_31_eu_tmma_cis_[2, 2, 2, 2]_[1, 1]",
+    "success": true,
+    "energy_hartree": -82.830768532418,
+    "opt_xyz": "xtb_opt/85_31_eu_tmma_cis_[2, 2, 2, 2]_[1, 1]/xtbopt.xyz",
+    "error": null
+  },
+  {
+    "name": "94_4_eu_tmma_cis_[2, 2, 2, 2]_[2]",
+    "success": false,
+    "energy_hartree": null,
+    "opt_xyz": null,
+    "error": "abnormal termination of xtb\nNote: The following floating-point exceptions are signalling: IEEE_INVALID_FLAG IEEE_DIVIDE_BY_ZERO IEEE_OVERFLOW_FLAG IEEE_UNDERFLOW_FLAG IEEE_DENORMAL\nERROR STOP \n\nError termination. Backtrace:\n#0  0x55c7fdf8a926 in ???\n#1  0x55c7fdeb8ec4 in ???\n#2  0x55c7fdea5272 in ???\n#3  0x15256e3dc7e4 in ???\n#4  0x55c7fdea5316 in ???\n#5  0xffffffffffffffff in ???\n"
+  }
+]

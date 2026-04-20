@@ -1,57 +1,50 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-dist/
-build/
-*.egg
-
-# Data files (large)
-data/*.pt
-data/*.pkl
-cif_output/
-results_v2/
-*.tar.gz
-
-# Model checkpoints (large)
-model/*.ckpt
+# Model checkpoints (large, not portable)
 models/
+*.ckpt
 
-# Generated outputs
-generate/
-generate_*/
+# Training data (large binary)
+data/train_ln.pt
+data/val_ln.pt
+data/test_ln.pt
+data/*.pt
 
-# Logs
-logs/
-*.log
+# Generated structures (could be huge)
+generated/
+
+# xTB optimization working directories (keep summary.json though)
+xtb_opt/*/
+!xtb_opt/summary.json
+
+# Download bundles
+for_download/
+full_download/
+*.tgz
+
+# Downloaded top candidates (duplicates of generated/)
+top10/
+
+# SLURM logs
 *.out
 *.err
-slurm-*.out
 
-# macOS
-.DS_Store
-._*
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
 
 # IDE
 .vscode/
 .idea/
 
-# Jupyter
-.ipynb_checkpoints/
+# OS
+.DS_Store
+Thumbs.db
 
-# Conda/venv
-.conda/
-venv/
-env/
+# Unused deprecated references
+eu_tbma_ref.xyz
+eu_tbma_noH.xyz
+eu_tmma_cis.cif
 
-# Temp files
-*.tmp
-*.swp
-*~
-
-prompts/
-run_fixes.sh
-run_prompts.sh
-
-# sed backup files
-*.bak
+# Single-structure test files
+PEQNAB01_comp_1.xyz
+test_complex.xyz
