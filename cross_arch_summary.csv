@@ -1,0 +1,5 @@
+name,checkpoint,metal,flags,n_attempted,n_valid,valid_rate,valid_rate_ci_lo,valid_rate_ci_hi,mean_bridges_per_struct,frac_with_zero_bridges,mean_context_perturb,mean_ligands_mutated_per_struct,denticity_recovery,status
+dblock_eu_tmma_r1,d-block pretrained,Eu,"r=1, no projection",200,,,,,,,,,,pending
+dblock_fe_tmma_r1,d-block pretrained,Fe,"r=1, no projection",200,,,,,,,,,,pending
+dblock_eu_tmma_r10_proj,d-block pretrained,Eu,"r=10, projection",200,,,,,,,,,,pending
+lnft_eu_tmma_r10_proj,Ln fine-tuned (epoch 48),Eu,"r=10, projection",500,,,,,,,,,,pending
