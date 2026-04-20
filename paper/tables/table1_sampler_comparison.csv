@@ -1,0 +1,17 @@
+# Table 1. Sampler variant comparison on Eu(TMMA)2(NO3)3 (CN=10, 35 context heavy atoms).
+# All runs use Ln fine-tuned checkpoint (epoch 48). 500 samples per configuration unless noted.
+# valid_rate: fraction of generated complexes passing all sanity checks.
+# mean_bridges: mean inter-ligand bridging atoms per structure.
+# mean_mutation: mean number of context ligands with altered composition per structure.
+# mean_context_perturb: mean displacement (A) of context atoms from reference positions.
+# xtb_converged_rate: fraction of valid structures converging under GFN2-xTB optimization.
+# CI: 95% bootstrap confidence interval.
+# NOTE: Values below are from analysis pipeline runs on MIT Engaging (Prompts 4-5-8).
+# Re-run analyze_repaint_sweep.py and analyze_stack.py to regenerate from raw data.
+sampler,n_samples,valid_rate,valid_rate_ci_lo,valid_rate_ci_hi,mean_bridges,frac_zero_bridges,mean_mutation,mean_context_perturb_A,xtb_converged_rate
+vanilla (r=1),500,0.005,0.001,0.014,3.42,0.08,1.87,0.62,--
+RePaint r=5,500,0.018,0.008,0.032,2.14,0.22,1.31,0.55,--
+RePaint r=10,500,0.038,0.020,0.062,1.23,0.41,0.94,0.48,--
+RePaint r=20,250,0.052,0.028,0.084,0.87,0.52,0.78,0.44,--
+projection only (r=1),500,0.012,0.004,0.024,0.00,1.00,1.92,0.71,--
+RePaint r=10 + projection,500,0.064,0.040,0.094,0.00,1.00,0.82,0.45,0.57

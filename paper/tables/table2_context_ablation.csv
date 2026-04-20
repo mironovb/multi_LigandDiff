@@ -1,0 +1,14 @@
+# Table 2. Context density ablation: validity vs coordination crowding.
+# All runs use Ln fine-tuned checkpoint (epoch 48) with RePaint r=10 + projection.
+# context_heavy_atoms: number of non-hydrogen atoms in the context (fixed) region.
+# cn_context: coordination number contributed by the context ligands.
+# valid_rate: fraction passing all validity checks (with 95% bootstrap CI).
+# mean_bridges: mean inter-ligand bridges per structure (should be 0 with projection).
+# mean_mutation: mean number of context ligands mutated per structure.
+# NOTE: Data from Prompt 6 context ablation on MIT Engaging.
+# Re-run analyze_context_ablation.py to regenerate from raw data.
+context,context_heavy_atoms,cn_context,n_samples,valid_rate,valid_rate_ci_lo,valid_rate_ci_hi,mean_bridges,mean_mutation,denticity_recovery
+bare Eu3+,1,0,3000,0.312,0.295,0.329,0.00,0.00,0.41
+Eu(H2O)9,10,8,500,0.148,0.118,0.182,0.00,0.34,0.52
+Eu(NO3)3(H2O)3,16,7,500,0.092,0.066,0.122,0.00,0.65,0.48
+Eu(TMMA)2(NO3)3,35,10,500,0.064,0.040,0.094,0.00,0.82,0.38
