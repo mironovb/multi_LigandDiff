@@ -118,7 +118,10 @@ under the same protocol), and is reported as such.
 --cycles 500`, gas phase, charge 0 for Eu³⁺ f⁶). Structures failing to converge in
 500 cycles or raising IEEE floating-point exceptions were counted as xTB failures.
 
-**DFT.** ORCA PBE0-D3/def2-TZVP templates with a Stuttgart ECP28MWB effective core
-potential on Eu and SMD(dodecane) solvation are prepared (`orca_templates/`,
-`dft_pipeline.py`). **DFT calculations have not yet been run** and no DFT results are
-reported here.
+**DFT.** ORCA templates are prepared (`orca_templates/pbe0_eu.inp`, `dft_pipeline.py`)
+at the **PBE0-D4/def2-TZVP** level (TightSCF, SlowConv), with europium described by the
+**SARC-DKH-TZVP basis and the SK-MCDHF-RSC effective core potential**; the complex is
+treated as neutral with spin multiplicity 7 (Eu³⁺, 4f⁶, S = 3), gas phase. **DFT
+calculations have not yet been run** and no DFT results are reported here; the protocol
+and the submission/parse pipeline are provided for the planned validation of the
+reference plus a small stratified set of valid completions.

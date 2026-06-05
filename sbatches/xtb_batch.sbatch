@@ -1,54 +1,50 @@
 #!/bin/bash
-#SBATCH -J xtb_batch
-#SBATCH -A mit_general
+#SBATCH -J ln_xtb
 #SBATCH -p mit_preemptable
-#SBATCH -N 1 -n 1 -c 8
-#SBATCH --mem=16G
-#SBATCH --time=08:00:00
+#SBATCH -N 1
+#SBATCH -n 1
+#SBATCH -c 16
+#SBATCH --mem=32G
+#SBATCH --time=03:59:59
 #SBATCH -o %x_%j.out
 #SBATCH -e %x_%j.err
 
+# GFN2-xTB optimization of valid generated structures (Jin/Merz validity protocol).
+# CPU job (no GPU). Adds Hs, runs GFN2-xTB (charge 0, uhf 6 for Eu3+ f6), aggregates.
+# Result of record: mask1 baseline 38/41 = 92.7%; RePaint r=5 81/85 converged.
+# Set SET=<dir-tag> to point at a different generated set.
+
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
+
 module load miniforge/25.11.0-0
 source activate ligdiff
+
 cd ~/multi_LigandDiff
 
-# xTB itself is single-threaded; we parallelise at the pipeline level
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-
-echo "=== xTB batch pipeline ==="
-echo "INPUT_DIR = ${INPUT_DIR:?'Set INPUT_DIR env var'}"
-echo "OUTPUT_DIR = ${OUTPUT_DIR:?'Set OUTPUT_DIR env var'}"
 echo "Start: $(date)"
+echo "Host: $(hostname)"
+which xtb && xtb --version 2>&1 | head -3
 
-python -u xtb_pipeline.py \
-    --input-dir "$INPUT_DIR" \
-    --output-dir "$OUTPUT_DIR" \
-    --org-xyz eu_tmma_cis.xyz \
-    --nproc 8 \
-    --timeout-minutes 10 \
-    --charge 0 \
-    --uhf 6
+# Default: optimise the mask1 baseline and the RePaint r=5 set.
+for SET in eu_tmma_mask1_epoch48 repaint_r5_epoch48; do
+    IN="generated/${SET}/noH"
+    OUT="xtb_results/${SET}"
+    if [ ! -d "$IN" ]; then
+        echo "skip: $IN not found"
+        continue
+    fi
+    echo "=== xTB on $IN -> $OUT at $(date) ==="
+    python -u xtb_pipeline.py \
+        --input-dir "$IN" \
+        --output-dir "$OUT" \
+        --org-xyz eu_tmma_cis.xyz \
+        --nproc ${SLURM_CPUS_PER_TASK} \
+        --timeout-minutes 10 \
+        --charge 0 \
+        --uhf 6
+    python -u xtb_pipeline.py --input-dir "$IN" --output-dir "$OUT" --aggregate
+    echo "--- $SET summary ---"
+    [ -f "$OUT/summary.json" ] && grep -c '"xtb_success": true' "$OUT/summary.json"
+done
 
-echo "=== Pipeline complete at $(date) ==="
-
-# Run analysis plots if there are results
-if [ -f "$OUTPUT_DIR/summary.csv" ]; then
-    echo "Generating plots..."
-    python -u xtb_summary_plot.py --results-dir "$(dirname "$OUTPUT_DIR")"
-fi
-
-echo "Done at $(date)"
-
-# --- Example submission ---
-# Single run:
-#   INPUT_DIR=generated/repaint_r10_epoch48/noH OUTPUT_DIR=xtb_results/r10 sbatch sbatches/xtb_batch.sbatch
-#
-# All runs:
-#   for d in generated/*/noH; do
-#       run=$(basename $(dirname $d))
-#       INPUT_DIR=$d OUTPUT_DIR=xtb_results/$run sbatch sbatches/xtb_batch.sbatch
-#   done
-#
-# Aggregate after all jobs finish:
-#   python xtb_pipeline.py --aggregate --output-dir xtb_results --input-dir dummy
+echo "Done: $(date)"

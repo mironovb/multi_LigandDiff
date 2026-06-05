@@ -143,8 +143,9 @@ Cluster experiments to run (compute, not code):
 5. **Dedicated mask2/mask3 run** to close S3 (a few GPU-h). Sharpens the degradation
    curve for the paper.
 6. **DFT validation** of the reference + ~3–5 valid mask1 completions (closes S4):
-   tighten xTB (`--alpb dodecane`, `--opt tight`, frozen context), then ORCA
-   PBE0-D3/def2-TZVP + Stuttgart ECP28MWB on Eu, SMD dodecane.
+   optionally tighten xTB first (`--opt tight`), then run the prepared ORCA protocol
+   (`orca_templates/pbe0_eu.inp`): PBE0-D4/def2-TZVP, Eu via SARC-DKH-TZVP + SK-MCDHF-RSC
+   ECP, neutral, mult 7. Driver: `sbatches/dft_orca.sbatch` + `dft_pipeline.py`.
 7. **Harden the resume path** in `finetune.py` (S5) so a re-fine-tune is robust.
 
 Scope discipline for the paper: keep it to **what ran** — fine-tune convergence,
