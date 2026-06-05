@@ -1,0 +1,12 @@
+# Table 1. RePaint resampling sweep: yield vs. donor-placement quality.
+# mask1 completion on Eu(TMMA)2(NO3)3 (CN=10, CCDC VEDTAA01), Ln fine-tuned checkpoint (epoch 48).
+# valid_complex = valid complexes / attempts (generator log "N valid / M attempted").
+# denticity_match = fraction of valid structures whose generated-ligand denticity matches the reference partition.
+# Source: job 12329152 (r=1,5), job 12340606 (r=10,20); metrics/results/aggregate_r*.txt.
+# All values verified against on-cluster logs + saved xyz counts (see VERIFICATION_REPORT.md, audited reference).
+# NOTE: yield rises monotonically with r, but denticity-match peaks at r=5 -> r=5 is the working point.
+sampler,attempts,valid,valid_complex_rate,denticity_match,denticity_match_n
+vanilla (r=1),2500,29,0.0116,0.138,29
+RePaint r=5,2500,85,0.0340,0.153,85
+RePaint r=10,1500,57,0.0380,0.105,19
+RePaint r=20,750,39,0.0520,,

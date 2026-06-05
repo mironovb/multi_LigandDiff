@@ -43,6 +43,10 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# Reference-only overview website / analysis reports (separate project, kept local).
+# Used as ground-truth reference for this repo; never tracked here.
+ligandgen/
+
 # Unused deprecated references
 eu_tbma_ref.xyz
 eu_tbma_noH.xyz

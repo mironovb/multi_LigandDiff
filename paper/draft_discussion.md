@@ -1,67 +1,79 @@
 # Discussion
 
-## Why Does f-Block Fail Where d-Block Succeeds?
+> Rewritten to match the verified results (see `RESEARCH_PLAN.md`). The previous
+> draft attributed the failure to "coordination crowding" on the basis of a context-
+> density ablation that never ran, and reported a "12.8× improvement" to 6.4% that
+> has no logs. The verified mechanism is different and more specific: a valence /
+> coordination-validity gap exposed when the scaffold is removed.
 
-The central finding of this study is that the multi-LigandDiff architecture, which achieves 89% valid_complex on d-block octahedral complexes (CN=6),^[jin2024multiligand] produces only 0.5--6.4% valid structures for lanthanide complexes at CN=10.
-Three factors contribute to this gap.
+## Completion vs. design: what the model actually learned
 
-**Coordination crowding.**
-The context-density ablation (Figure 4) demonstrates that validity degrades monotonically with the number of fixed context atoms, independent of chemical identity.
-At CN=10, the coordination sphere contains 35 heavy atoms within ~3 Angstroms of the metal center, compared to ~15 for a typical CN=6 octahedral complex.
-The denoising network must resolve steric clashes among atoms packed at approximately twice the spatial density, and the DDPM noise schedule---calibrated for d-block geometries---does not provide sufficient signal for the network to resolve these clashes at intermediate timesteps.
+The fine-tuned model is a competent **completion** tool and an incompetent
+**designer**, and the boundary between the two is sharp. Given the metal plus four of
+five ligands it regenerates the fifth reliably (126 valid mask1 structures, xTB-
+stable at 92.7%); given the metal alone it produces nothing valid (0/6300). The
+degradation is monotonic and steep (126 → 4 → 0 → 0 as 1, 2, 3, then all ligands are
+hidden), and the cliff arrives as early as two hidden ligands.
 
-**Fluxional bonding and geometric diversity.**
-Lanthanide coordination geometry is significantly more variable than d-block geometry.
-While d-block complexes strongly prefer octahedral, tetrahedral, or square-planar arrangements (determined by crystal-field splitting), Ln complexes adopt geometries ranging from capped trigonal prism to bicapped square antiprism with low energy barriers between isomers.^[kravchuk2024ejic]
-This conformational flexibility means the training data contains a broader distribution of metal--donor angles and distances, making it harder for the model to learn a sharp posterior over valid geometries.
+The mechanism is the key point. The de-novo rejections are **~100% nitrogen explicit-
+valence violations**, not geometric near-misses. multi-LigandDiff diffuses atom
+positions and types jointly and then *infers* chemistry post hoc (bond perception +
+RDKit sanitization). Its only coordination knowledge is implicit — the geometric
+distribution of training complexes — plus a procedural denticity partition table; it
+has **no explicit notion of atomic valence**. With a scaffold, the fixed context
+constrains the pocket enough that local valence falls out correctly. Without one, the
+model paints an atom cloud into a fully connected graph and hopes the resulting Lewis
+structure is legal; for a ~35-heavy-atom CN-10 sphere it essentially never is.
 
-**Training data sparsity.**
-Although the CSD contains 95,279 Ln complexes, these are distributed across 14 metals and CN 7--10, yielding an average of ~1,700 structures per (metal, CN) pair.
-The pretrained d-block model was trained on ~370,000 structures concentrated in CN 2--6, providing ~20x more training examples per CN bin.
-Fine-tuning partially compensates (val_loss 977 to 50), but the remaining loss gap indicates incomplete convergence.
+This reframes the result away from "high coordination number is intrinsically too
+crowded." The completions *are* CN-10 and *do* succeed. What fails is **composition
+from scratch**: building a valence-correct ligand framework without a template to
+copy. The inpainting objective, as trained, teaches local consistency, not global
+composition.
 
-## What Does This Tell Us About Generative Models for Metal Complexes?
+## Why resampling helps with yield but not validity
 
-Our results suggest that current equivariant diffusion architectures face a scalability wall at high coordination numbers.
-The valid_complex metric compounds per-ligand error rates across ligand groups, and this compounding becomes catastrophic at CN>8 even when individual ligand validity is reasonable (82%).
+RePaint raises the valid-complex yield monotonically (1.16 → 3.40 → 3.80 → 5.20% from
+r = 1 to 20) by giving the denoiser repeated chances to re-harmonize generated atoms
+with the fixed context. But it does not install a notion of valence, so the donor-
+placement quality (denticity-match) peaks at r = 5 and then declines: beyond the
+working point, extra resampling yields more structures that pass the coarse filter
+without better fine-grained placement. Inference-time tricks buy throughput on the
+*completion* task; they do not address the *design* failure, which is chemical.
 
-The failure-mode taxonomy (Section 4.2) reveals that the dominant errors---bridging, mutation, and perturbation---are all *geometric* rather than *chemical* in nature.
-The model generates plausible atom types but places them in physically impossible positions.
-This suggests that architectural improvements should focus on geometric conditioning rather than chemical diversity: for example, explicit distance-matrix constraints or equivariant attention mechanisms that can resolve multi-body steric interactions.
+## Implications for generative models of metal complexes
 
-The partial success of RePaint resampling and hard projection (Section 4.6) supports this interpretation.
-RePaint provides repeated opportunities for the network to resolve geometric clashes, while projection enforces hard geometric constraints post-hoc.
-Neither modifies the network itself, and their combined 12.8-fold improvement over vanilla sampling indicates substantial untapped geometric reasoning in the existing model weights.
+The honest contribution here is a clean, diagnosable **negative result** on a regime
+no prior generative model had touched (f-block, CN 7–10): a generic 3D diffusion
+model adapts cheaply and completes well but cannot design de novo, and the failure has
+a specific, citable cause (valence). This directly motivates **coordination-aware
+generation**: fix chemistry first, then realize geometry, rather than generating
+geometry and inferring chemistry. Concretely — generate or select the ligand as a
+valence-valid chemical graph (where nitrogen cannot have four bonds) before 3D
+placement; make denticity / CN / donor identity explicit inputs; and, if a 3D
+generative stage is retained, enforce valence/CN/charge constraints *inside* the
+sampler (e.g. via the exclusion-shell projection already implemented) instead of
+rejecting 99.99% of free samples.
 
 ## Limitations
 
-Several limitations should be considered when interpreting these results.
+- All generation experiments used a single metal (Eu) and a single reference
+  (Eu(TMMA)₂(NO₃)₃). Generalization to other lanthanides and ligand systems is not
+  demonstrated.
+- The mask 2 and mask 3 points come from time-limit-cut-off jobs; a dedicated run is
+  needed to pin the exact validity cliff. maskall = 0/6300 is conclusive on its own.
+- Validity here is GFN2-xTB + bond-perception/RDKit. **No DFT validation has been
+  run**; the prepared ORCA PBE0-D3/def2-TZVP protocol is future work.
+- GFN2-xTB is known to be imperfect for f-block elements (a minority of structures
+  raise IEEE exceptions); reported convergence rates should be read in that light.
 
-First, all experiments were conducted on a single metal (Eu) and a single reference structure (Eu(TMMA)_2(NO_3)_3).
-While Eu was chosen for its experimental relevance and well-characterized crystallography,^[kravchuk2024ejic] the generalizability to other lanthanides (particularly early Ln with larger ionic radii) and to different ligand systems has not been demonstrated.
+## Future directions
 
-Second, the GFN2-xTB level of theory is known to be unreliable for lanthanides: 43% of our valid structures failed to converge, and the parametrization of 4f electrons in tight-binding methods remains an active area of development.^[bannwarth2019gfn2xtb]
-The DFT validation (PBE0-D4 with SARC-DKH relativistic treatment) provides a more reliable assessment but was limited to a small number of structures.
-
-Third, the computational cost of RePaint resampling scales linearly with r, making r=10 approximately 10x more expensive than vanilla sampling.
-At the current 6.4% validity rate, generating 100 valid structures requires ~1,500 samples and ~75 minutes of H200 GPU time, which may limit high-throughput applications.
-
-Fourth, our evaluation metrics, while more detailed than prior work, still do not capture all aspects of chemical plausibility.
-For example, we do not assess metal oxidation state consistency, spin-state compatibility, or thermodynamic stability relative to alternative coordination isomers.
-
-## Future Directions
-
-Several approaches may improve generative quality for high-CN complexes.
-
-**Classifier-free guidance.** Retraining with conditional and unconditional denoising (as in classifier-free guidance for images) could allow the model to increase the weight of context-conditioning at inference time, potentially reducing mutations without post-hoc fixes.
-
-**DPS-style Tweedie-decoded penalties.** Diffusion posterior sampling (DPS) enables differentiable loss functions (e.g., Lennard-Jones repulsion between ligand groups) to be applied through the Tweedie denoised estimate x_0|t at each timestep.
-Unlike hard projection, this approach is smooth and could better preserve coordination geometry while penalizing steric clashes.
-
-**Architector-augmented training data.** The CSD provides only experimentally characterized structures, biasing the training distribution toward crystallizable complexes.
-Architector^[taylor2023architector] can generate physically reasonable Ln geometries from SMILES input, potentially expanding the training set by 10--100x and covering CN=10 geometries more densely.
-
-**Multi-scale denoising.**
-A hierarchical approach---first generating the coordination polyhedron (metal + donor atoms), then generating each ligand scaffold conditioned on its donor atom positions---could decompose the CN=10 problem into a manageable metal-geometry step (10 atoms) followed by several independent ligand-generation steps (5--10 atoms each).
-
-These directions suggest that the CN=10 barrier is not fundamental but rather reflects the mismatch between current architectures' implicit assumptions (moderate CN, well-separated ligand groups) and the geometric reality of f-block coordination chemistry.
+The de-novo gap is the entry point to a rare-earth-native, coordination-aware
+platform (see `RESEARCH_PLAN.md`, Track B): predict-then-build with a valence-valid
+ligand graph, extended past the d-block CN ≤ 6 regime to CN 7–10; hard donor (O/N)
+priors and CN 8–10 saturation for trivalent lanthanides; the lanthanide contraction
+as a selectivity handle for differential binding of adjacent Ln; and first-shell
+counter-ions/solvent (nitrate, water) modeled explicitly. Whether to keep diffusion
+with hard constraints or move to a predict-then-build architecture is the central
+open design decision.

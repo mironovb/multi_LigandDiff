@@ -1,0 +1,8 @@
+# Table 3. GFN2-xTB optimization of valid generated structures (Jin/Merz validity protocol).
+# GFN2-xTB --opt normal --uhf 6 --cycles 500, gas phase, charge 0 (Eu3+ f6).
+# converged = optimization reached convergence within 500 cycles without an IEEE floating-point exception.
+# Source: xtb_results/mask1_baseline/summary.json (41 entries), xtb_results/repaint_r5/summary.json (85 entries).
+# Verified against on-cluster summary.json (see VERIFICATION_REPORT.md, audited reference).
+structure_set,n_structures,converged,converged_rate
+mask1 baseline,41,38,0.927
+RePaint r=5,85,81,0.953

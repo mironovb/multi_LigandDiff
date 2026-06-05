@@ -1,0 +1,12 @@
+# Table 2. Scaffold-degradation / design-ability test on Eu(TMMA)2(NO3)3 (CN=10, 5 ligands).
+# Ln fine-tuned checkpoint (epoch 48), RePaint r=5. mask_k ligands hidden at once; the rest fixed as context.
+# mask all = only the bare Eu center as context (true de-novo generation of the whole coordination sphere).
+# attempts for maskall = 150 seeds x 42 denticity partitions of CN=10 = 6300.
+# Source: jobs 14292188 (mask1/mask2) and 14344725 (mask3/maskall); design_test_runs/*/mask*/noH counts.
+# NOTE: mask2 (=4) and mask3 (=0) are from time-limit-cut-off jobs; a dedicated mask2/mask3 run (sbatches/design_test.sbatch) will firm these up.
+# This is the headline result: validity collapses to zero as the scaffold shrinks; rejections are ~100% nitrogen explicit-valence violations.
+mask_level,context_ligands,attempts,valid,valid_complex_rate,note
+mask 1 (completion control),4 of 5,2500,126,0.0504,works
+mask 2,3 of 5,,4,,cut-off (partial)
+mask 3,2 of 5,>=1500,0,0.0,cut-off; empty output dir
+mask all (de-novo),0 of 5,6300,0,0.0,0 valid / 6300
