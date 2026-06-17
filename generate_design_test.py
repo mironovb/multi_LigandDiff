@@ -340,8 +340,10 @@ def main():
     p.add_argument('--resample_r', type=int, default=5,
                    help='RePaint resampling iterations (working point r=5)')
     p.add_argument('--project_enabled', type=eval, default=False)
-    p.add_argument('--d_min_start', type=float, default=1.5)
-    p.add_argument('--d_min_end', type=float, default=1.3)
+    # d_min kept above the bond-perception cutoffs (>= ~1.72 Å, O–O) so projection
+    # is not a no-op against get_bond_order; see BOND_PERCEPTION_CUTOFFS in src/projection.py.
+    p.add_argument('--d_min_start', type=float, default=2.2)
+    p.add_argument('--d_min_end', type=float, default=1.9)
     p.add_argument('--add_Hs', type=eval, default=False)
     p.add_argument('--max_denticity', type=int, default=const.MAX_DENTICITY,
                    help='Chelate cap: max donors one generated ligand binds through '

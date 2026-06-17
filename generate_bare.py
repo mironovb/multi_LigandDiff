@@ -50,8 +50,10 @@ parser.add_argument('--n_samples', type=int, default=500)
 parser.add_argument('--ligand_sizes', type=str, default='random')
 parser.add_argument('--resample_r', type=int, default=1)
 parser.add_argument('--project_enabled', type=eval, default=False)
-parser.add_argument('--d_min_start', type=float, default=1.5)
-parser.add_argument('--d_min_end', type=float, default=1.3)
+# d_min kept above the bond-perception cutoffs (>= ~1.72 Å, O–O) so projection
+# is not a no-op against get_bond_order; see BOND_PERCEPTION_CUTOFFS in src/projection.py.
+parser.add_argument('--d_min_start', type=float, default=2.2)
+parser.add_argument('--d_min_end', type=float, default=1.9)
 parser.add_argument('--max_denticity', type=int, default=const.MAX_DENTICITY,
                     help='Chelate cap: max donors one generated ligand binds through '
                          '(caps the denticity partitions handed to the model)')
@@ -211,7 +213,7 @@ def build_data_objects(metal_elem, metal_pos, target_cn, n_samples,
 # Reuse generate_ligand from generate_mask1.py (identical logic)
 def generate_ligand(data, model, device, batch_size=32, outdir='generated',
                     resample_r=1, project_enabled=False,
-                    d_min_start=1.5, d_min_end=1.3):
+                    d_min_start=2.2, d_min_end=1.9):
     os.makedirs(f'{outdir}/noH', exist_ok=True)
     ddpm = DDPM.load_from_checkpoint(model, map_location=device).eval().to(device)
     dataloader = DataLoader(data, batch_size=batch_size, shuffle=False)
