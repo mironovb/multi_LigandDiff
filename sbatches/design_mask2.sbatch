@@ -1,0 +1,52 @@
+#!/bin/bash
+#SBATCH -J ln_mask2
+#SBATCH -p mit_preemptable
+#SBATCH -N 1
+#SBATCH -n 1
+#SBATCH -c 8
+#SBATCH --gres=gpu:h200:1
+#SBATCH --mem=64G
+#SBATCH --time=03:59:59
+#SBATCH -o %x_%j.out
+#SBATCH -e %x_%j.err
+
+# Track A, run 1/2 (prompt 24): the dedicated mask-2 completion run that finishes the
+# degradation curve. mask 2 hides 3 of 5 ligands -> C(5,2)=10 masked subsets per seed.
+# The old mask2=4 was only what survived a 4 h cutoff in a combined sweep; this runs
+# mask 2 ALONE to completion so 126 -> <mask2> -> 0 -> 0 becomes a measured curve.
+# Uses the charge-aware gate (prompts 01-02) so the count is the fixed-instrument count.
+#
+# n_samples 250 x 10 subsets = 2500 attempts -- comfortably inside one 4 h wall.
+# nounset trap: do not `set -euo pipefail` + `source ~/.bashrc`.
+
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
+export WANDB_MODE=offline
+
+module load miniforge/25.11.0-0
+module load cuda/12.9.1
+source activate ligdiff
+
+cd ~/multi_LigandDiff
+
+echo "Start: $(date)"
+echo "Host: $(hostname)"
+nvidia-smi
+
+CKPT=models/ln_finetuned/ln_finetuned_epoch=48.ckpt
+OUT=design_test_runs/mask2_${SLURM_JOB_ID}
+
+python -u generate_design_test.py \
+    --complex eu_tmma_cis.xyz \
+    --model "$CKPT" \
+    --outdir "$OUT" \
+    --mask_k 2 \
+    --n_samples 250 \
+    --batch_size 32 \
+    --resample_r 5 \
+    --ligand_sizes random \
+    --max_denticity 4
+
+echo "=== mask2 valid count ==="
+ls "$OUT"/mask2/noH/ 2>/dev/null | wc -l
+cat "$OUT"/mask2/accounting.json 2>/dev/null || true
+echo "Done: $(date)"

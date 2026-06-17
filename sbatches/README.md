@@ -20,6 +20,37 @@ GPU stages, CPU-only for xTB/DFT. Environment in every script:
 Stages 1–4 are independent and can be submitted in parallel. Stage 5 depends on 1
 (and optionally 2); stage 6 depends on 5.
 
+## Fix-validation harness (code-review fixes)
+
+These accompany the `prompts/` worklist (gitignored) that delivers the
+[Code Review](../ligandgen/) fixes. CPU jobs gate the no-GPU fixes; GPU/ORCA jobs run the
+validation experiments. Submit the CPU gates after each batch of fixes; run the GPU jobs
+once their prerequisite prompts have landed (each script's header lists them).
+
+| Job | Script | GPU | Gates / runs |
+|---|---|---|---|
+| Unit tests | `run_unit_tests.sbatch` | no | pytest + import/compile smoke for fixes 01–21 |
+| Re-score validity | `rescore_validity.sbatch` | no | reference + saved outputs through the fixed gate (Finding 2) |
+| Post-fix smoke | `smoke_fixes.sbatch` | yes (short) | a few mask-1 completions — "did we break sampling?" |
+| De-novo re-test | `design_maskall_fixed.sbatch` | yes | maskall with all fixes on (vs. the old 0/6300) |
+| Mask-2 curve | `design_mask2.sbatch` | yes | dedicated mask-2 run to completion (Track A) |
+| Curriculum re-finetune | `finetune_curriculum.sbatch` | H200 | retrain on the high-mask curriculum (needs CPU re-prep first) |
+| DFT showcase | `dft_showcase.sbatch` | ORCA | prepare + submit per-structure DFT on top mask-1 (Track A) |
+
+```bash
+# CPU gates (no GPU) — run after each batch of no-GPU fixes
+sbatch sbatches/run_unit_tests.sbatch
+sbatch sbatches/rescore_validity.sbatch      # the decisive Finding-2 experiment
+
+# GPU validation — after the relevant prompts land
+sbatch sbatches/smoke_fixes.sbatch
+sbatch sbatches/design_maskall_fixed.sbatch  # the de-novo re-test
+sbatch sbatches/design_mask2.sbatch          # finishes the degradation curve
+
+# DFT showcase (after the xTB stage): launcher prepares + submits one ORCA job per structure
+sbatch sbatches/dft_showcase.sbatch
+```
+
 ## Quick start
 
 ```bash
