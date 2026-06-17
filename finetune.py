@@ -199,7 +199,7 @@ def main():
         activation='silu',
         n_layers=args.n_layers,
         attention=args.attention,
-        normalization_factor=1,
+        normalization_factor=100,  # match pretrained backbone: pre_trained.ckpt stores 100, and the warm-started GVP weights were trained at that aggregation scale (passing 1 silently mismatched it)
         normalize_factors=[10, 4, 1],
         drop_rate=0.2,
         diffusion_steps=args.diffusion_steps,

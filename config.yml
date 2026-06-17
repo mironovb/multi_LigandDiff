@@ -35,10 +35,14 @@ activation: silu
 n_layers: 5            # finetune.py:160  (was 2)
 attention: True
 
-# normalization_factor: see prompt 20
-#   finetune.py:202 currently passes 1; the old template's value of 100 was wrong.
-#   Left out as a live key so train.py falls back to its argparse default
-#   (1, train.py:130); the canonical value is resolved in prompt 20.
+normalization_factor: 100   # canonical aggregation scale (finetune.py:202 now passes 100 too)
+#   Set by the pretrained backbone: model/pre_trained.ckpt stores
+#   normalization_factor=100 in its hyper_parameters, and Dynamics/GVPNetwork
+#   default to 100 (egnn.py:73, gvp_model.py:22). The earlier ln fine-tunes
+#   (ln_finetuned_epoch=*.ckpt) stored 1 — finetune.py warm-started the
+#   100-scale weights at scale 1, a silent mismatch (conv_layer.py divides the
+#   summed messages by this factor). Those checkpoints may need re-finetuning
+#   at 100. Live key here so train.py uses 100 (overrides its argparse default).
 
 diffusion_steps: 500
 diffusion_noise_schedule: polynomial_2   # finetune.py:206  (was learned)
