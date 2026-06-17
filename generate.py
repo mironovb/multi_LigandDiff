@@ -24,6 +24,8 @@ import os
 import json
 import numpy as np
 import tempfile
+import subprocess
+import shutil
 import ast
 from collections import Counter
 from itertools import combinations
@@ -70,6 +72,18 @@ parser.add_argument('--valence_guard', type=eval, default=False,
                          "cannot support a generated atom's heavy-atom neighbour count "
                          '(e.g. a 4-neighbour site -> not N), steering the type channel '
                          'toward a valence-legal element instead of rejecting post-hoc.')
+parser.add_argument('--relax_before_gate', choices=['none', 'gfnff', 'gfn2'], default='none',
+                    help='Optional: short, frozen-context xTB relax of the generated atoms '
+                         'BEFORE the validity gate (code-review path item 7, second half), so '
+                         'the gate scores a SETTLED physical geometry instead of a raw diffusion '
+                         'point cloud. The context atoms (incl. the metal) are frozen with an xTB '
+                         '$fix block; only generated atoms move (charge 0, --uhf 6, --opt loose, '
+                         'a short cycle cap). "none" (default) keeps GPU generation unchanged; '
+                         '"gfnff" is the cheap force-field option for big sweeps; "gfn2" is the '
+                         'accurate option for the final showcase. HEAVIER per sample -- a QUALITY '
+                         'aid, NOT for the 6,300-attempt sweep. Silently skipped with a warning if '
+                         'xtb is not on PATH. The rejection summary then also reports how many '
+                         'structures the relax rescued (failed raw, passed relaxed).')
 parser.add_argument('--max_denticity', type=int, default=const.MAX_DENTICITY,
                     help='Chelate cap: max donors one generated ligand binds through '
                          '(caps the denticity partitions handed to the model)')
@@ -540,8 +554,112 @@ def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENT
             f"Adjust the template assignment, --max_denticity, or the complex.")
     return new_data
 
+def _read_xyz_coords(path):
+    """Parse the (N,3) coordinate list (in file order) from a standard .xyz file.
+
+    Returns a list of ``[x, y, z]`` floats, or None on any parse error.
+    """
+    try:
+        with open(path) as fh:
+            lines = fh.readlines()
+        n = int(lines[0].strip())
+        coords = []
+        for line in lines[2:2 + n]:
+            parts = line.split()
+            coords.append([float(parts[1]), float(parts[2]), float(parts[3])])
+        return coords if len(coords) == n else None
+    except (ValueError, IndexError, OSError):
+        return None
+
+
+def _xtb_relax_generated(positions, atom_types, metal, n_fragment, method,
+                         charge=0, uhf=6, cycles=20, timeout_s=300):
+    """Short, frozen-context xTB relax of the GENERATED atoms only (code-review path item 7).
+
+    A raw diffusion point cloud has atoms at borderline distances; a brief GFN-FF/GFN2
+    optimisation settles them so the validity gate scores a *physical* geometry, not noise.
+    The context atoms (rows 0..n_fragment-1, including the metal at row 0) are held fixed with
+    an xTB ``$fix`` block, so only the generated atoms move -- closer to a hard constraint than
+    rejecting the raw cloud post-hoc.
+
+    Args:
+        positions: (N,3) tensor of absolute coords, context-first (metal at row 0).
+        atom_types: (N,) element indices (the metal row is ignored; its symbol comes from ``metal``).
+        metal: nuclear-charge tensor of the metal (write_xyz_file maps it to the element symbol).
+        n_fragment: number of context atoms = the contiguous rows 1..n_fragment (1-based) to freeze.
+        method: 'gfnff' (cheap, big sweeps) or 'gfn2' (accurate, final showcase).
+        charge, uhf: passed to xTB (0 / 6 reuse the Eu(3+) f6 invocation in xtb_pipeline.py).
+        cycles: optimisation-cycle cap (short by design).
+        timeout_s: per-structure wall-clock hang-guard.
+
+    Returns an (N,3) tensor with the generated rows replaced by the relaxed coordinates
+    (context rows kept exactly as input), on the same device/dtype as ``positions``; or None if
+    xTB errors / times out / yields no usable geometry (the caller then falls back to raw).
+    """
+    gfn_flag = {'gfnff': ['--gfnff'], 'gfn2': ['--gfn', '2']}.get(method)
+    if gfn_flag is None:
+        return None
+    n_atoms = positions.shape[0]
+    try:
+        with tempfile.TemporaryDirectory() as work:
+            # Reuse write_xyz_file so the elements xTB sees match exactly what the gate sees
+            # (metal symbol at row 0, then the rest of the context, then the generated atoms).
+            write_xyz_file(positions, atom_types, os.path.join(work, 'input'), metal, n_fragment)
+            # $fix exactly freezes the context atoms (1-based, contiguous) -> only the generated
+            # atoms are optimised. Passed to xTB via the detailed-input file (--input).
+            with open(os.path.join(work, 'fix.inp'), 'w') as fh:
+                fh.write(f"$fix\n   atoms: 1-{n_fragment}\n$end\n")
+            cmd = (['xtb', 'input.xyz'] + gfn_flag +
+                   ['--opt', 'loose', '--cycles', str(cycles),
+                    '--chrg', str(charge), '--uhf', str(uhf), '--input', 'fix.inp'])
+            try:
+                subprocess.run(cmd, cwd=work, capture_output=True, text=True, timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                return None
+            # Prefer the converged geometry; accept the last geometry of a short opt that did not
+            # fully converge (still better-settled than the raw point cloud).
+            out_xyz = next((os.path.join(work, c) for c in ('xtbopt.xyz', 'xtblast.xyz')
+                            if os.path.isfile(os.path.join(work, c))), None)
+            coords = _read_xyz_coords(out_xyz) if out_xyz else None
+        if coords is None or len(coords) != n_atoms:
+            return None
+        relaxed = positions.clone()
+        if n_fragment < n_atoms:
+            relaxed[n_fragment:] = torch.tensor(coords[n_fragment:], dtype=positions.dtype,
+                                                device=positions.device)
+        return relaxed
+    except Exception:
+        # Never let a relax hiccup crash generation -- fall back to the raw coordinates.
+        return None
+
+
+def _validity_gate(positions, atom_types, metal, n_fragment, expected_natoms, ligand_metrics):
+    """Run the post-sampling validity gate on one structure's coordinates.
+
+    Returns the rejection-summary status for these coords -- one of
+    'overlap' | 'atom_count' | 'sanitize' | 'disconnected' | 'valid' -- exactly mirroring the
+    original inline checks, so the default (no-relax) path is behaviour-preserving.
+    """
+    overlapping, liglist = sanitycheck(positions, atom_types, metal)
+    if overlapping:
+        return 'overlap'
+    total_atoms = sum(len(lig) for lig in liglist) + 1
+    if total_atoms != expected_natoms:
+        return 'atom_count'
+    rdmols = [build_mol(positions[lig], atom_types[lig]) for lig in liglist
+              if any(item >= n_fragment for item in lig)]
+    valid = ligand_metrics.compute_validity(rdmols)
+    if len(valid) != len(rdmols):
+        return 'sanitize'
+    connected = ligand_metrics.compute_connectivity(valid)
+    if len(connected) != len(rdmols):
+        return 'disconnected'
+    return 'valid'
+
+
 def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes',resample_r=1,
-                    project_enabled=False,d_min_start=2.2,d_min_end=1.9,valence_guard=False):
+                    project_enabled=False,d_min_start=2.2,d_min_end=1.9,valence_guard=False,
+                    relax_before_gate='none'):
     os.makedirs(f'{outdir}/noH', exist_ok=True)
     ddpm = DDPM.load_from_checkpoint(model, map_location=device).eval().to(device)
     dataloader = DataLoader(data, batch_size=batch_size, shuffle=False)
@@ -549,6 +667,15 @@ def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes'
     num=0
     reasons = Counter()
     attempts = 0
+    rescued = 0       # structures the relax rescued: failed raw, passed relaxed (Prompt 17)
+    relax_failed = 0  # relax was attempted but xTB produced no usable geometry (fell back to raw)
+    # Optional xTB pre-gate relax (code-review path item 7): settle the raw point cloud so the
+    # gate scores a physical geometry. Guard a missing xtb binary -> warn + skip, do not crash.
+    relax_active = relax_before_gate != 'none'
+    if relax_active and shutil.which('xtb') is None:
+        print("[relax_before_gate] WARNING: 'xtb' not found on PATH -- skipping the pre-gate "
+              "relax; structures will be gated on raw coordinates as usual.")
+        relax_active = False
     for b, data in enumerate(dataloader):
         pos_orginal=data['pos']
         batch_seg=data.batch
@@ -580,28 +707,41 @@ def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes'
             positions=x[batch_seg==i]
             atom_types=one_hot[batch_seg==i].argmax(dim=1)
             metal=metals[i]
-            overlapping,liglist=sanitycheck(positions, atom_types,metal)
-            total_atoms=sum(len(lig) for lig in liglist)+1
-            if overlapping:
-                reasons['overlap'] += 1
-                continue
-            if total_atoms != natoms[i].item():
-                reasons['atom_count'] += 1
-                continue
-            rdmols=[build_mol(positions[lig],atom_types[lig]) for lig in liglist if any(item >= n_fragment for item in lig)]
-            valid = ligand_metrics.compute_validity(rdmols)
-            if len(valid) != len(rdmols):
-                reasons['sanitize'] += 1
-                continue
-            connected = ligand_metrics.compute_connectivity(valid)
-            if len(connected) != len(rdmols):
-                reasons['disconnected'] += 1
-                continue
-            reasons['valid'] += 1
-            num += 1
-            write_xyz_file(positions, atom_types,f'{outdir}/noH/{b}_{i}_{labels[i]}',metal,n_fragment)
+            expected_natoms=natoms[i].item()
+
+            # Default: gate the raw sampled coordinates. With --relax_before_gate, first gate the
+            # raw cloud (to score the rescue), then run a frozen-context xTB relax and gate the
+            # SETTLED geometry instead; fall back to raw coords if the relax fails.
+            gate_positions=positions
+            raw_status=None
+            relaxed_ok=False
+            if relax_active:
+                raw_status=_validity_gate(positions,atom_types,metal,n_fragment,
+                                          expected_natoms,ligand_metrics)
+                relaxed=_xtb_relax_generated(positions,atom_types,metal,n_fragment,
+                                             method=relax_before_gate)
+                if relaxed is None:
+                    relax_failed+=1
+                else:
+                    gate_positions=relaxed
+                    relaxed_ok=True
+
+            status=_validity_gate(gate_positions,atom_types,metal,n_fragment,
+                                  expected_natoms,ligand_metrics)
+            if relaxed_ok and raw_status!='valid' and status=='valid':
+                rescued+=1
+            reasons[status]+=1
+            if status=='valid':
+                num+=1
+                write_xyz_file(gate_positions,atom_types,f'{outdir}/noH/{b}_{i}_{labels[i]}',metal,n_fragment)
 
     summary = {'attempts': attempts, 'valid': num, **dict(reasons)}
+    if relax_before_gate != 'none':
+        # Prompt 17 accounting: which relax method ran (or that it was skipped for lack of xtb),
+        # how many raw-failures the relax rescued, and how many relax attempts produced no geometry.
+        summary['relax_method'] = relax_before_gate if relax_active else 'skipped(no_xtb)'
+        summary['relax_rescued'] = rescued
+        summary['relax_failed'] = relax_failed
     os.makedirs(outdir, exist_ok=True)
     with open(f'{outdir}/rejection_summary.json', 'w') as fh:
         json.dump(summary, fh, indent=2)
@@ -727,7 +867,8 @@ def add_H(org_xyz,gen_dir):
 def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add_Hs=False,resample_r=1,
          project_enabled=False,d_min_start=2.2,d_min_end=1.9,max_denticity=const.MAX_DENTICITY,
          denticity_prior='uniform',seed=None,donor_spec=None,
-         ligand_templates=None,template_init_coords=False,valence_guard=False):
+         ligand_templates=None,template_init_coords=False,valence_guard=False,
+         relax_before_gate='none'):
     """
     Generate multiple new structures for each variation in a given complex
     Args:
@@ -748,6 +889,11 @@ def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add
             parse_ligand_templates / --ligand_templates. A SEEDING AID, not a hard constraint.
         template_init_coords: when ligand_templates is set, also seed each templated slot's
             starting coordinates from the template geometry (still diffused). Default False.
+        relax_before_gate: 'none' (default), 'gfnff' or 'gfn2'. When not 'none', each sampled
+            structure is xTB-relaxed with the context (incl. metal) frozen BEFORE the validity
+            gate, so the gate scores a settled geometry instead of a raw point cloud; the
+            rejection summary then reports how many structures the relax rescued. A QUALITY aid
+            (heavier per sample), not for the 6,300-attempt sweep; skipped if xtb is not on PATH.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     rng = np.random.default_rng(seed)
@@ -787,7 +933,7 @@ def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add
     batch_size=min(batch_size,len(data))
     generate_ligand(data,model,device,batch_size,outdir=outdir,resample_r=resample_r,
                     project_enabled=project_enabled,d_min_start=d_min_start,d_min_end=d_min_end,
-                    valence_guard=valence_guard)
+                    valence_guard=valence_guard,relax_before_gate=relax_before_gate)
     if add_Hs:
         add_H(complex,outdir)
     print('Done!')
@@ -798,7 +944,8 @@ if __name__ == '__main__':
     main(args.outdir,args.model,args.complex,args.batch_size,args.n_samples,args.ligand_sizes,args.add_Hs,args.resample_r,
          args.project_enabled,args.d_min_start,args.d_min_end,args.max_denticity,
          args.denticity_prior,args.seed,args.donor_spec,
-         args.ligand_templates,args.template_init_coords,args.valence_guard)
+         args.ligand_templates,args.template_init_coords,args.valence_guard,
+         args.relax_before_gate)
 
     
 
