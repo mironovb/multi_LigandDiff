@@ -9,6 +9,7 @@ Output: data/train_ln.pt and data/val_ln.pt
 import argparse
 import csv
 import glob
+import hashlib
 import logging
 import os
 import random
@@ -307,11 +308,60 @@ def process_structure(structure, ln_idx):
 # Ligand-masking augmentation
 # ---------------------------------------------------------------------------
 
-def generate_masking_augmentations(processed, label, max_augment=20):
+# Mask-count curriculum: a subset that masks ``k`` ligands is weighted by
+# ``k ** exponent`` when down-sampling.  ``uniform`` (exponent 0 → weight 1) is
+# the legacy behaviour; ``linear``/``quadratic`` over-represent high-mask
+# subsets so the hard de-novo / bare-metal regime is actually seen in training.
+_CURRICULUM_EXPONENT = {"uniform": 0, "linear": 1, "quadratic": 2}
+
+
+def _stable_seed(base_seed, label):
+    """Deterministic per-complex seed, independent of PYTHONHASHSEED / worker.
+
+    ``random.Random(<str>)`` falls back to the process-salted built-in
+    ``hash()``, so it is NOT reproducible across the (possibly ``spawn``-ed)
+    prep workers.  Derive the seed from a stable digest of the label instead so
+    a given complex always draws the same augmentation subset.
+    """
+    digest = hashlib.sha1(label.encode("utf-8")).digest()[:8]
+    return base_seed ^ int.from_bytes(digest, "big")
+
+
+def _weighted_sample_without_replacement(population, weights, n, rng):
+    """Sample *n* items from *population* without replacement with
+    P(pick) ∝ weight (Efraimidis–Spirakis A-Res: draw key ``u ** (1/w)`` per
+    item and keep the *n* largest).  Equal weights reduce to a uniform draw, so
+    this is a drop-in, weightable generalisation of ``random.sample``.
+    """
+    if n >= len(population):
+        return list(population)
+    # Sort on the key alone so the (tuple) items themselves are never compared.
+    keyed = [(rng.random() ** (1.0 / w), item)
+             for item, w in zip(population, weights)]
+    keyed.sort(key=lambda t: t[0], reverse=True)
+    return [item for _key, item in keyed[:n]]
+
+
+def generate_masking_augmentations(processed, label, max_augment=20,
+                                   curriculum="uniform", force_all_masked=True,
+                                   seed=42):
     """Generate masking combinations for a processed complex.
 
-    For k ligands enumerate all 2^k − 1 non-empty subsets.  If that exceeds
-    *max_augment*, randomly sample instead.
+    For *k* ligands enumerate all 2^k − 1 non-empty subsets.  When that exceeds
+    *max_augment* we down-sample — but, unlike a plain uniform draw, bias the
+    sample toward the hard regime (code-review path item 4 / strategy b):
+
+      * ``force_all_masked`` guarantees the single all-masked subset (bare
+        metal — the de-novo task) survives: it is reserved up front and
+        excluded from the random draw rather than left to a 1-in-(2^k−1) shot.
+      * ``curriculum`` weights each remaining subset by its mask count ``k``:
+        ``uniform`` (w∝1, legacy), ``linear`` (w∝k) or ``quadratic`` (w∝k²),
+        over-representing high-mask configs while singletons still appear.
+
+    Sampling uses a per-complex seeded RNG (derived from *seed* + *label*) so the
+    augmentation is reproducible regardless of worker count or multiprocessing
+    start method.  Only the down-sampling path is affected; when all subsets fit
+    within *max_augment* every combination is kept as before.
     """
     ligands = processed['ligands']
     k = len(ligands)
@@ -322,7 +372,22 @@ def generate_masking_augmentations(processed, label, max_augment=20):
         all_combos.extend(combinations(range(k), r))
 
     if len(all_combos) > max_augment:
-        all_combos = random.sample(all_combos, max_augment)
+        rng = random.Random(_stable_seed(seed, label))
+        all_masked = tuple(range(k))  # the r == k subset: every ligand masked
+
+        # Reserve the bare-metal subset and exclude it from the draw so it is
+        # guaranteed rather than competing for a sampling slot.
+        reserved, pool, budget = [], all_combos, max_augment
+        if force_all_masked:
+            reserved = [all_masked]
+            pool = [c for c in all_combos if c != all_masked]
+            budget = max(0, max_augment - 1)
+
+        exponent = _CURRICULUM_EXPONENT[curriculum]
+        weights = [len(c) ** exponent for c in pool]  # mask-count^exponent
+        sampled = _weighted_sample_without_replacement(
+            pool, weights, budget, rng)
+        all_combos = reserved + sampled
 
     data_list = []
     for combo in all_combos:
@@ -355,7 +420,8 @@ def generate_masking_augmentations(processed, label, max_augment=20):
 def process_one_complex(args_tuple):
     """Process a single complex. Returns a status dict.
 
-    args_tuple: (element, refcode, filename, cif_dir, max_augment)
+    args_tuple: (element, refcode, filename, cif_dir, max_augment,
+                 curriculum, force_all_masked, seed)
     Module-level so it is picklable for ``multiprocessing.Pool``.
 
     Returns dict with keys:
@@ -364,7 +430,8 @@ def process_one_complex(args_tuple):
       samples: list[Data] (empty unless status == "ok")
       reason: str (only for non-ok)
     """
-    element, refcode, filename, cif_dir, max_augment = args_tuple
+    (element, refcode, filename, cif_dir, max_augment,
+     curriculum, force_all_masked, seed) = args_tuple
     try:
         warnings.filterwarnings("ignore")
 
@@ -394,7 +461,8 @@ def process_one_complex(args_tuple):
 
         label = f"{element}_{refcode}"
         augmented_samples = generate_masking_augmentations(
-            processed, label, max_augment)
+            processed, label, max_augment, curriculum=curriculum,
+            force_all_masked=force_all_masked, seed=seed)
 
         if not augmented_samples:
             return {"status": "empty", "element": element, "refcode": refcode,
@@ -646,6 +714,21 @@ def main():
                         help='Output directory for .pt files')
     parser.add_argument('--max_augment', type=int, default=20,
                         help='Max masking augmentations per complex')
+    parser.add_argument('--mask_curriculum',
+                        choices=['uniform', 'linear', 'quadratic'],
+                        default='uniform',
+                        help='Bias the per-complex down-sample by mask count k: '
+                             'uniform (w∝1, legacy), linear (w∝k), quadratic '
+                             '(w∝k²). linear/quadratic over-represent high-mask '
+                             'subsets to train the bare-metal/de-novo regime.')
+    parser.add_argument('--force_all_masked', dest='force_all_masked',
+                        action='store_true', default=True,
+                        help='Guarantee the all-masked (bare-metal) subset '
+                             'survives down-sampling (default: on).')
+    parser.add_argument('--no_force_all_masked', dest='force_all_masked',
+                        action='store_false',
+                        help='Ablation: let the all-masked subset compete for a '
+                             'sampling slot like any other (legacy behaviour).')
     parser.add_argument('--val_fraction', type=float, default=0.1,
                         help='Fraction of complexes for validation')
     parser.add_argument('--workers', type=int, default=1,
@@ -690,6 +773,7 @@ def main():
         arg_tuples.append((
             row['element'], row['refcode'], filename,
             args.cif_dir, args.max_augment,
+            args.mask_curriculum, args.force_all_masked, args.seed,
         ))
 
     total = len(arg_tuples)
