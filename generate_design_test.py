@@ -214,7 +214,8 @@ def run_mask_level(complex_path, model, outdir, mask_k, n_samples, batch_size,
                    ligand_size, resample_r, project_enabled, d_min_start,
                    d_min_end, add_Hs, max_denticity=const.MAX_DENTICITY,
                    denticity_prior='uniform', seed=None,
-                   ligand_templates=None, template_init_coords=False):
+                   ligand_templates=None, template_init_coords=False,
+                   valence_guard=False):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     rng = np.random.default_rng(seed)
     if seed is not None:
@@ -324,7 +325,7 @@ def run_mask_level(complex_path, model, outdir, mask_k, n_samples, batch_size,
                       f"(context ligands present; gen<->context obstacles)")
         generate_ligand(data, model, device, bs, outdir=outdir, resample_r=resample_r,
                         project_enabled=project_enabled, d_min_start=d_min_start,
-                        d_min_end=d_min_end)
+                        d_min_end=d_min_end, valence_guard=valence_guard)
         valid = count_valid(outdir)
     yield_pct = 100.0 * valid / attempts_eligible if attempts_eligible else 0.0
     print(f'design_test mask_k={mask_k}  context={context_ligs}/{n_ligands}  '
@@ -377,6 +378,11 @@ def main():
     # is not a no-op against get_bond_order; see BOND_PERCEPTION_CUTOFFS in src/projection.py.
     p.add_argument('--d_min_start', type=float, default=2.2)
     p.add_argument('--d_min_end', type=float, default=1.9)
+    p.add_argument('--valence_guard', type=eval, default=False,
+                   help='Valence-aware type masking during sampling (path item 7): '
+                        'suppress elements over their const.ALLOWED_BONDS valence for a '
+                        "generated atom's heavy-atom neighbour count (e.g. 4-neighbour "
+                        'site -> not N), steering toward valence-legal elements.')
     p.add_argument('--add_Hs', type=eval, default=False)
     p.add_argument('--max_denticity', type=int, default=const.MAX_DENTICITY,
                    help='Chelate cap: max donors one generated ligand binds through '
@@ -409,7 +415,8 @@ def main():
                    args.resample_r, args.project_enabled, args.d_min_start,
                    args.d_min_end, args.add_Hs, args.max_denticity,
                    args.denticity_prior, args.seed,
-                   args.ligand_templates, args.template_init_coords)
+                   args.ligand_templates, args.template_init_coords,
+                   args.valence_guard)
     print('Done!')
 
 

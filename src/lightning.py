@@ -332,7 +332,8 @@ class DDPM(pl.LightningModule):
         return metrics               
 
     def sample_chain(self, data,  keep_frames=None, resample_r=1,
-                     project_enabled=False, d_min_start=1.5, d_min_end=1.3):
+                     project_enabled=False, d_min_start=1.5, d_min_end=1.3,
+                     valence_guard=False):
 
         x = data['pos']
         h = data['one_hot']
@@ -360,7 +361,8 @@ class DDPM(pl.LightningModule):
             project_enabled=project_enabled,
             ligand_group=ligand_group,
             d_min_start=d_min_start,
-            d_min_end=d_min_end)
+            d_min_end=d_min_end,
+            valence_guard=valence_guard)
 
         return chain
 

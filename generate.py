@@ -64,6 +64,12 @@ parser.add_argument('--d_min_end', type=float, default=1.9,
                     help='Exclusion shell d_min at low noise (end of reverse). '
                          'Kept >= ~1.72 Å (the O–O bond cutoff) so projected atoms '
                          'are not still perceived as bonded; see src/projection.py.')
+parser.add_argument('--valence_guard', type=eval, default=False,
+                    help='Valence-aware type masking during sampling (code-review path '
+                         'item 7): suppress any element whose const.ALLOWED_BONDS valence '
+                         "cannot support a generated atom's heavy-atom neighbour count "
+                         '(e.g. a 4-neighbour site -> not N), steering the type channel '
+                         'toward a valence-legal element instead of rejecting post-hoc.')
 parser.add_argument('--max_denticity', type=int, default=const.MAX_DENTICITY,
                     help='Chelate cap: max donors one generated ligand binds through '
                          '(caps the denticity partitions handed to the model)')
@@ -535,7 +541,7 @@ def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENT
     return new_data
 
 def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes',resample_r=1,
-                    project_enabled=False,d_min_start=2.2,d_min_end=1.9):
+                    project_enabled=False,d_min_start=2.2,d_min_end=1.9,valence_guard=False):
     os.makedirs(f'{outdir}/noH', exist_ok=True)
     ddpm = DDPM.load_from_checkpoint(model, map_location=device).eval().to(device)
     dataloader = DataLoader(data, batch_size=batch_size, shuffle=False)
@@ -556,7 +562,8 @@ def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes'
         try:
             chain_batch = ddpm.sample_chain(data, keep_frames=100, resample_r=resample_r,
                                               project_enabled=project_enabled,
-                                              d_min_start=d_min_start, d_min_end=d_min_end)
+                                              d_min_start=d_min_start, d_min_end=d_min_end,
+                                              valence_guard=valence_guard)
         except utils.FoundNaNException as e:
             batch_count = int(batch_size)
             attempts += batch_count
@@ -720,7 +727,7 @@ def add_H(org_xyz,gen_dir):
 def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add_Hs=False,resample_r=1,
          project_enabled=False,d_min_start=2.2,d_min_end=1.9,max_denticity=const.MAX_DENTICITY,
          denticity_prior='uniform',seed=None,donor_spec=None,
-         ligand_templates=None,template_init_coords=False):
+         ligand_templates=None,template_init_coords=False,valence_guard=False):
     """
     Generate multiple new structures for each variation in a given complex
     Args:
@@ -779,7 +786,8 @@ def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add
                      ligand_templates=parsed_templates,template_init_coords=template_init_coords)
     batch_size=min(batch_size,len(data))
     generate_ligand(data,model,device,batch_size,outdir=outdir,resample_r=resample_r,
-                    project_enabled=project_enabled,d_min_start=d_min_start,d_min_end=d_min_end)
+                    project_enabled=project_enabled,d_min_start=d_min_start,d_min_end=d_min_end,
+                    valence_guard=valence_guard)
     if add_Hs:
         add_H(complex,outdir)
     print('Done!')
@@ -790,7 +798,7 @@ if __name__ == '__main__':
     main(args.outdir,args.model,args.complex,args.batch_size,args.n_samples,args.ligand_sizes,args.add_Hs,args.resample_r,
          args.project_enabled,args.d_min_start,args.d_min_end,args.max_denticity,
          args.denticity_prior,args.seed,args.donor_spec,
-         args.ligand_templates,args.template_init_coords)
+         args.ligand_templates,args.template_init_coords,args.valence_guard)
 
     
 

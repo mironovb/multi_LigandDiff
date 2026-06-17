@@ -6,7 +6,9 @@ from torch_scatter import scatter_add
 from src import utils
 from src.egnn import Dynamics
 from src.projection import project_exclusion_shell, d_min_schedule
+from src.bonding import bond_cutoff
 from src.noise import GammaNetwork, PredefinedNoiseSchedule
+from src import const
 from typing import Union
 
 
@@ -123,7 +125,8 @@ class EDM(torch.nn.Module):
 
     @torch.no_grad()
     def sample_chain(self, x, h, context, ligand_diff, batch_seg,batch_size, ligand_site, keep_frames=None,timesteps=None, resample_r=1,
-                     project_enabled=False, ligand_group=None, d_min_start=1.5, d_min_end=1.3):
+                     project_enabled=False, ligand_group=None, d_min_start=1.5, d_min_end=1.3,
+                     valence_guard=False):
         timesteps = self.T if timesteps is None else timesteps
         assert 0 < keep_frames <= timesteps
         assert timesteps % keep_frames == 0
@@ -202,6 +205,40 @@ class EDM(torch.nn.Module):
                                   f"{int(moved.sum().item())}/{int(ligand_diff.sum().item())} "
                                   f"gen atoms (max {float(disp[moved].max().item()):.2f} Å) "
                                   f"at d_min {d_min_start:.2f}->{d_min_end:.2f} Å")
+                # Valence-aware type steer (optional, --valence_guard; code-review
+                # path item 7). The de-novo failures are dominated by nitrogen in
+                # impossible 4-bond environments, so rather than reject the result
+                # post-hoc we softly mask the TYPE channel DURING denoising -- making
+                # the geometry the model commits to one a valence-legal element can
+                # occupy. For each generated atom we count heavy-atom neighbours under
+                # the shared bond rule (src.bonding, vectorised) and demote every
+                # element whose const.ALLOWED_BONDS valence cannot support that count
+                # (a 4-neighbour site -> not N (max 3), pushed toward C (max 4)).
+                # The demotion is to just below the atom's OWN logit floor: enough to
+                # flip the argmax to a legal element, yet every value stays within the
+                # network's own output range (on-manifold), so feeding the steered
+                # latent into the next reverse step stays numerically stable -- a soft
+                # steer, never a +/-inf hard reject. Generated atoms only; context
+                # (incl. the metal) is never touched.
+                if valence_guard:
+                    h_type = z[:, self.n_dims:]
+                    pos_A = z[:, :self.n_dims] * self.norm_values[0]   # normalized -> Å
+                    allowed = self._valence_allowed_mask(
+                        pos_A, h_type, context, ligand_diff, batch_seg)
+                    cur = torch.argmax(h_type, dim=1)
+                    corrected = (~allowed.gather(1, cur.view(-1, 1)).squeeze(1)) \
+                        & (ligand_diff.view(-1) == 1)
+                    floor = h_type.min(dim=1, keepdim=True).values - 1e-2
+                    h_type_steer = torch.where(allowed, h_type, floor)
+                    z = torch.cat([
+                        z[:, :self.n_dims],
+                        h_type * context + h_type_steer * ligand_diff,
+                    ], dim=1)
+                    if corrected.any() and not getattr(self, '_valence_logged', False):
+                        self._valence_logged = True
+                        print(f"[edm] valence guard active: steered "
+                              f"{int(corrected.sum().item())} generated atom(s) off an "
+                              f"over-coordinated element (e.g. N>3) at step {s}")
                 # Re-noise back to level t (unless last iteration)
                 if u < resample_r - 1:
                     gamma_s = self.gamma(s_array)
@@ -225,7 +262,8 @@ class EDM(torch.nn.Module):
             ligand_diff=ligand_diff,
             batch_size=batch_size,
             batch_seg=batch_seg,
-            ligand_site=ligand_site
+            ligand_site=ligand_site,
+            valence_guard=valence_guard,
         )
         
         # Correct CoM drift for examples without intermediate states
@@ -270,7 +308,7 @@ class EDM(torch.nn.Module):
         z_s=z_t*context+z_s*ligand_diff
         return z_s
 
-    def sample_p_xh_given_z0_only_ligand_diff(self, z_0, context, ligand_diff, batch_size, batch_seg,ligand_site):
+    def sample_p_xh_given_z0_only_ligand_diff(self, z_0, context, ligand_diff, batch_size, batch_seg,ligand_site, valence_guard=False):
         """Samples x ~ p(x|z0). Samples only linker features and coords"""
         zeros = torch.zeros(size=(batch_size, 1), device=z_0.device)
         gamma_0 = self.gamma(zeros)
@@ -291,9 +329,79 @@ class EDM(torch.nn.Module):
         xh=z_0*context+xh*ligand_diff
         x, h = xh[:, :self.n_dims], xh[:, self.n_dims:]
         x, h = self.unnormalize(x, h)
-        h = F.one_hot(torch.argmax(h, dim=1), self.in_node_nf) 
+        # Valence-aware read-off (optional, --valence_guard): mask any element whose
+        # max heavy-atom valence (const.ALLOWED_BONDS) cannot support a generated
+        # atom's neighbour count BEFORE the argmax, so the COMMITTED type is
+        # valence-legal (a 4-neighbour site is never read off as N). This is the final
+        # discrete step -- nothing is fed back into the network -- so a hard -1e9 mask
+        # is safe here (unlike the in-loop steer, which stays on-manifold). x is
+        # already in Å (unnormalized above); pairwise distances are translation invariant.
+        if valence_guard:
+            allowed = self._valence_allowed_mask(x, h, context, ligand_diff, batch_seg)
+            h = h.masked_fill(~allowed, -1e9)
+        h = F.one_hot(torch.argmax(h, dim=1), self.in_node_nf)
 
         return x, h
+
+    def _valence_tables(self, device):
+        """Vocabulary-indexed valence tables for ``--valence_guard``, built once.
+
+        Returns ``(bond_cutoff_matrix, max_valence)``:
+          * ``bond_cutoff_matrix[a, b]`` -- the molSimplify covalent-radii bond cutoff
+            (Å) for element pair (a, b), i.e. the vectorised form of
+            :func:`src.bonding.are_bonded` (``are_bonded <=> dist < cutoff``) over the
+            model's heavy-atom vocabulary ``const.IDX2ATOM``;
+          * ``max_valence[a]`` -- the largest heavy-atom valence ``const.ALLOWED_BONDS``
+            permits for element ``a`` (N->3, O->2, C->4, S->4, P->5, halogens->1).
+        """
+        if getattr(self, '_val_cut_mat', None) is None:
+            n = self.in_node_nf
+            cut_mat = torch.zeros(n, n)
+            max_val = torch.zeros(n)
+            for a in range(n):
+                el_a = const.IDX2ATOM[a]
+                permitted = const.ALLOWED_BONDS[el_a]
+                max_val[a] = max(permitted) if isinstance(permitted, (list, tuple)) \
+                    else permitted
+                for b in range(n):
+                    cut_mat[a, b] = bond_cutoff(el_a, const.IDX2ATOM[b])
+            self._val_cut_mat = cut_mat
+            self._val_max = max_val
+        return self._val_cut_mat.to(device), self._val_max.to(device)
+
+    def _valence_allowed_mask(self, pos_A, h_type, context, ligand_diff, batch_seg):
+        """``(N, in_node_nf)`` bool mask -- element ``t`` is permitted for atom ``i``
+        iff ``t``'s max heavy-atom valence can support ``i``'s current heavy-atom
+        neighbour count. Drives ``--valence_guard``.
+
+        Neighbours are counted with the shared molSimplify bond rule (vectorised
+        :mod:`src.bonding`) using each atom's current argmax element. The metal -- a
+        context atom whose (fixed) type row is all-equal (the all-zero one-hot the
+        prep prepends) -- is excluded as a neighbour: a metal coordinate bond does not
+        consume organic valence, so a 3-bond amine N donating to the metal is NOT
+        flagged. Context atoms are never restricted, and any atom with no legal element
+        (count exceeds every valence) is left to the model's own choice.
+        """
+        cut_mat, max_val = self._valence_tables(h_type.device)
+        n_atoms = h_type.shape[0]
+        elem = torch.argmax(h_type, dim=1)                              # (N,) current element
+
+        # Metal = context atom with an all-equal (all-zero one-hot) type row.
+        ctx = context.view(-1) == 1
+        flat = (h_type.max(dim=1).values - h_type.min(dim=1).values) < 1e-6
+        is_metal = ctx & flat                                           # (N,)
+
+        dist = torch.cdist(pos_A, pos_A)                                # (N, N) Å
+        cut = cut_mat[elem][:, elem]                                    # (N, N) pair cutoff
+        same = batch_seg.view(-1, 1) == batch_seg.view(1, -1)          # same complex
+        eye = torch.eye(n_atoms, dtype=torch.bool, device=h_type.device)
+        bonded = (dist < cut) & same & (~eye) & (~is_metal.view(1, -1))
+        n_heavy = bonded.sum(dim=1)                                     # (N,) heavy-atom neighbours
+
+        allowed = max_val.view(1, -1) >= n_heavy.view(-1, 1)            # (N, in_node_nf)
+        allowed = allowed | (ligand_diff.view(-1, 1) == 0)             # never restrict context
+        allowed = allowed | (~allowed.any(dim=1, keepdim=True))        # keep model's choice if none legal
+        return allowed
 
     def compute_x_pred(self, eps_t, z_t, gamma_t,batch_seg):
         """Computes x_pred, i.e. the most likely prediction of x."""
