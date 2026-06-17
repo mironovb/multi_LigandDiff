@@ -25,6 +25,7 @@ import torch
 torch.multiprocessing.set_sharing_strategy("file_system")
 from torch_geometric.data import Data
 
+from src import bonding
 from src.const import ATOM2IDX, CHARGES, MAX_LIGANDS, metals2idx
 
 # Force unbuffered output for SLURM logs (Python 3.7+).
@@ -45,11 +46,12 @@ LN_ELEMENTS = {
     'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu',
 }
 
-# Donor distance cutoff in Angstrom (Ln–donor bonds)
-DONOR_CUTOFF = 3.0
-
-# Organic bond cutoff in Angstrom
-ORGANIC_BOND_CUTOFF = 1.9
+# Bond/donor cutoffs are NOT defined here anymore. Whether two atoms are bonded
+# (organic bond) or a non-Ln atom is a donor (Ln–donor bond) is decided by the
+# shared, single-source-of-truth rule in ``src.bonding`` — the same covalent-radii
+# predicate the validity gate grades generated complexes against (Finding 6).
+# The old flat constants (organic 1.9 Å, donor 3.0 Å) are recorded for the
+# startup diff as ``bonding.PREP_LEGACY_ORGANIC_CUTOFF`` / ``PREP_LEGACY_DONOR_CUTOFF``.
 
 
 # ---------------------------------------------------------------------------
@@ -106,17 +108,17 @@ def build_bond_graph(structure):
     except ImportError:
         pass
 
-    # Fallback: distance-based
+    # Fallback: distance-based, via the shared covalent-radii rule (src.bonding).
+    # are_bonded decides organic *and* Ln–donor bonds straight from the element
+    # radii (no separate organic/donor threshold), so the fallback agrees with
+    # the validity gate for every pair, lanthanide centre included. CrystalNN
+    # above stays the preferred path; only this fallback distance changes.
     for i in range(n):
         ei = str(structure[i].specie)
         for j in range(i + 1, n):
             ej = str(structure[j].specie)
             dist = structure.get_distance(i, j)
-            if ei in LN_ELEMENTS or ej in LN_ELEMENTS:
-                thresh = DONOR_CUTOFF
-            else:
-                thresh = ORGANIC_BOND_CUTOFF
-            if dist < thresh:
+            if bonding.are_bonded(ei, ej, dist):
                 graph[i].append(j)
                 graph[j].append(i)
     return graph
@@ -152,36 +154,42 @@ def find_ln_site(structure):
 # Ligand decomposition
 # ---------------------------------------------------------------------------
 
-def decompose_ligands(positions, ln_local_idx=0):
+def decompose_ligands(positions, elements, ln_local_idx=0):
     """Decompose a molecular unit into ligands.
 
     Removes the Ln centre (assumed at *ln_local_idx*) and finds connected
-    components among the remaining atoms using an organic-bond distance
-    cutoff.
+    components among the remaining atoms. Both the donor test (Ln–donor bond)
+    and the organic-bond test use the shared, element-aware covalent-radii rule
+    in ``src.bonding`` — the same predicate the validity gate uses — so *elements*
+    must be aligned with *positions*.
 
     Returns
     -------
     ligands : list[list[int]]
         Each inner list holds local atom indices belonging to one ligand.
     donors  : list[int]
-        Local indices of atoms within DONOR_CUTOFF of the Ln centre.
+        Local indices of atoms bonded to the Ln centre (``bonding.are_bonded``).
     """
     n = len(positions)
     non_ln = [i for i in range(n) if i != ln_local_idx]
     ln_pos = positions[ln_local_idx]
+    ln_el = elements[ln_local_idx]
 
-    # Identify donors
+    # Identify donors: non-Ln atoms bonded to the Ln centre, per the shared rule
+    # (element-aware, so e.g. Ln–O ~2.78 Å but Ln–S ~3.12 Å — not one flat 3.0 Å).
     donors = []
     for i in non_ln:
-        if np.linalg.norm(positions[i] - ln_pos) < DONOR_CUTOFF:
+        dist = np.linalg.norm(positions[i] - ln_pos)
+        if bonding.are_bonded(ln_el, elements[i], dist):
             donors.append(i)
 
-    # Build organic graph among non-Ln atoms
+    # Build organic graph among non-Ln atoms via the same shared predicate.
     organic_adj = defaultdict(set)
     for ii, i in enumerate(non_ln):
         for jj in range(ii + 1, len(non_ln)):
             j = non_ln[jj]
-            if np.linalg.norm(positions[i] - positions[j]) < ORGANIC_BOND_CUTOFF:
+            dist = np.linalg.norm(positions[i] - positions[j])
+            if bonding.are_bonded(elements[i], elements[j], dist):
                 organic_adj[i].add(j)
                 organic_adj[j].add(i)
 
@@ -266,8 +274,8 @@ def process_structure(structure, ln_idx):
 
     pos = torch.tensor(positions, dtype=torch.float32)
 
-    # Ligand decomposition
-    ligands, donor_indices = decompose_ligands(positions, ln_local_idx=0)
+    # Ligand decomposition (elements aligned with positions; Ln at index 0)
+    ligands, donor_indices = decompose_ligands(positions, elements, ln_local_idx=0)
     if len(ligands) == 0 or len(ligands) > MAX_LIGANDS:
         return None
 
@@ -651,6 +659,11 @@ def main():
                         help='Skip processing; merge existing chunks into '
                              'final train/val files and exit')
     args = parser.parse_args()
+
+    # Startup diff: prep's bond/donor cutoffs are now the shared src.bonding rule
+    # (the validity-gate arbiter), not the old flat constants. Printed so a re-prep
+    # is traceable in the SLURM log. Behaviour change is expected — see Finding 6.
+    print(bonding.cutoff_change_banner(), flush=True)
 
     random.seed(args.seed)
     np.random.seed(args.seed)
