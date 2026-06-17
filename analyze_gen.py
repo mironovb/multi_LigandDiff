@@ -4,6 +4,8 @@ import os
 import numpy as np
 from collections import Counter
 
+from src import bonding  # single-source donor/bond rule (Finding 6)
+
 def analyze(filepath):
     with open(filepath) as f:
         lines = f.readlines()
@@ -21,17 +23,23 @@ def analyze(filepath):
     print(f"Total: {total} | Context: {n_context} | Generated: {len(atoms) - n_context}")
     
     eu = atoms[0]
-    
-    # Coordination sphere (within 3.0 Å)
+    metal_sym = eu[0]
+
+    # Coordination sphere: the shared single-source donor rule (src.bonding) — the
+    # molSimplify covalent-radii cutoff the validity gate grades against, ~2.78–2.81 Å
+    # for Ln–O/N and wider for soft donors. NOT a flat 3.0 Å: on the training set a
+    # flat 3.0 Å inflated the CN 9/10 tail (mean CN 7.5 → 8.1) by leaking second-shell
+    # contacts, so it disagreed with the 2.8 Å Methods figure (Finding 6).
     coord = []
     for i, a in enumerate(atoms[1:], 1):
         d = np.sqrt(sum((a[k+1]-eu[k+1])**2 for k in range(3)))
-        if d < 3.0:
+        if bonding.are_bonded(metal_sym, a[0], d):
             role = "CTX" if i <= n_context - 1 else "GEN"
             coord.append((d, a[0], role, i))
     coord.sort()
-    
-    print(f"Eu coordination sphere (r<3.0 Å): CN={len(coord)}")
+
+    print(f"{metal_sym} coordination sphere "
+          f"(src.bonding covalent-radii donor rule, ~2.8 Å for O/N): CN={len(coord)}")
     for d, sym, role, i in coord:
         print(f"  [{role}] {sym} atom #{i}  d={d:.3f} Å")
     

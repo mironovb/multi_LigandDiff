@@ -12,9 +12,12 @@ Cambridge Structural Database (CSD v5.46). Because no CSD Python-API license was
 available, a custom pipeline using pymatgen and ASE was built in place of the CSD
 API. Starting from **53,333 Ln-containing CIFs**, disordered and polymeric
 structures were removed, leaving **31,979 mononuclear molecular complexes**. First-
-shell donors were identified as atoms within 2.8 Å of the Ln center; ligands were
-obtained by building a covalent-bond graph (1.3× the sum of covalent radii), removing
-the Ln node, and taking connected components containing at least one donor.
+shell donors were identified as atoms within 2.8 Å of the Ln center (in code this is
+the molSimplify covalent-radii rule shared with the validity gate, `src/bonding.py`,
+which gives 2.78–2.81 Å for the dominant Ln–O/N donors — matching this figure; an
+earlier flat 3.0 Å prep cutoff was retired as it inflated the CN 9/10 tail, Finding 6);
+ligands were obtained by building a covalent-bond graph (1.3× the sum of covalent radii),
+removing the Ln node, and taking connected components containing at least one donor.
 
 Filtering to training candidates (mononuclear; molecular; CN ∈ {7,8,9,10}; all
 non-Ln elements in {C,N,O,F,P,S,Cl,Br}) yielded **9,306 training complexes** (6,563

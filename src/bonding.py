@@ -181,6 +181,15 @@ def donor_cutoff(donor_element='O', metal_element=None):
     Called bare, returns the representative value for a mean lanthanide bonding
     a *donor_element* (default O) -- the figure printed in the prep startup
     banner. Replaces the old flat ``DONOR_CUTOFF = 3.0``.
+
+    This covalent-radii cutoff is ~2.78-2.81 A for the dominant Ln-O/N donors
+    (bare ``donor_cutoff()`` ~= 2.78 A), which IS the **2.8 A** quoted in the
+    paper Methods/SI -- code and docs agree on the donor cutoff (Finding 6). The
+    retired flat 3.0 A over-counted the first shell: on the training complexes it
+    shifted the CN distribution's 9/10 tail up (mean CN 7.5 -> 8.1) by leaking
+    second-shell contacts, while 2.78-2.81 A cleanly brackets the observed
+    Ln-donor bond lengths (2.43-2.61 A). Soft donors sit higher by construction
+    (e.g. Ln-S ~3.1 A), which a single flat number could not capture.
     """
     if metal_element is not None:
         return bond_cutoff(metal_element, donor_element)

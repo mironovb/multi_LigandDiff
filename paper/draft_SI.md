@@ -12,6 +12,14 @@ CN ∈ {7,8,9,10}, non-Ln elements ∈ {C,N,O,F,P,S,Cl,Br}) → **9,306 training
 (6,563 O/N-donor only). Ligand inventory: 216,509 coordinating instances, 54,946 unique
 SMILES.
 
+The 2.8 Å donor cutoff is realized in code by the molSimplify covalent-radii rule of
+`src/bonding.py` (shared with the validity gate; 2.78–2.81 Å for the dominant Ln–O/N
+donors, wider for soft donors), which matches this figure — code and Methods agree
+(Finding 6). The earlier flat **3.0 Å** prep value was retired: on the tensorized
+training complexes it shifted the CN distribution's 9/10 tail upward (mean CN 7.5 → 8.1)
+by leaking second-shell contacts, whereas 2.78–2.81 Å cleanly brackets the observed
+Ln–donor bond lengths (2.61 → 2.43 Å) and preserves the CN-8 peak.
+
 Consistency check vs. the Jiang group's published CSD analyses: donor distribution
 ≈ 65% O / 18% N / 14% C; CN distribution peaks at CN 8; Ln–donor distance contracts
 2.61 Å (La) → 2.43 Å (Lu) (lanthanide contraction). A per-element breakdown for all 14
