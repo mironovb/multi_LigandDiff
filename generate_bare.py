@@ -221,6 +221,40 @@ def generate_ligand(data, model, device, batch_size=32, outdir='generated',
     num = 0
     reasons = Counter()
     attempts = 0
+
+    # Projection guard (code-review Finding 5): prove the exclusion shell has
+    # eligible pairs instead of silently no-op'ing. The bare-metal context is
+    # metal-only -- the metal is an all-zero ligand_group row (group -1) and is
+    # exempt -- so the ONLY obstacles are generated atoms in a DIFFERENT ligand
+    # group (Prompt 12's generated<->generated shell). Eligible pairs therefore
+    # exist iff generated atoms span >=2 ligand groups; assert that and log so a
+    # run proves the shell ran.
+    if project_enabled and len(data):
+        n_metal_only = n_eligible = 0
+        rep_gen = 0
+        for d in data:
+            ctx = d['context'].view(-1) == 1
+            lg = d['ligand_group']
+            gen = ~ctx
+            if rep_gen == 0:
+                rep_gen = int(gen.sum().item())
+            if float(lg[ctx].sum().item()) != 0.0:
+                continue                         # fixed (non-metal) ligand obstacles present
+            n_metal_only += 1
+            if int((lg[gen].sum(dim=0) > 0).sum().item()) >= 2:
+                n_eligible += 1
+        if n_metal_only > 0:
+            assert n_eligible > 0, (
+                "project_enabled=True with metal-only context but no complex has "
+                "generated atoms spanning >=2 ligand groups: the exclusion shell "
+                "has no eligible generated<->generated pairs and would silently "
+                "no-op. See src/projection.py / Prompt 12.")
+            print(f"projection: active, {rep_gen} gen atoms "
+                  f"({n_eligible}/{n_metal_only} metal-only complexes have "
+                  f"eligible gen<->gen pairs)")
+        else:
+            print(f"projection: active, {rep_gen} gen atoms")
+
     for b, data in enumerate(dataloader):
         pos_original = data['pos']
         batch_seg = data.batch

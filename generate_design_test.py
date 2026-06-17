@@ -289,6 +289,39 @@ def run_mask_level(complex_path, model, outdir, mask_k, n_samples, batch_size,
     valid = 0
     if attempts_eligible > 0:
         bs = min(batch_size, attempts_eligible)
+        # Projection guard (code-review Finding 5): prove the exclusion shell has
+        # eligible pairs instead of silently no-op'ing. In the maskall (metal-only)
+        # context the metal is an all-zero ligand_group row (group -1) and is exempt,
+        # so the ONLY obstacles are generated atoms in a DIFFERENT ligand group
+        # (Prompt 12's generated<->generated shell): eligible pairs exist iff
+        # generated atoms span >=2 groups. (For mask_k<all the fixed context ligands
+        # are the obstacles, so no gen<->gen assertion is required.)
+        if project_enabled:
+            n_metal_only = n_eligible = 0
+            rep_gen = 0
+            for d in data:
+                ctx = d['context'].view(-1) == 1
+                lg = d['ligand_group']
+                gen = ~ctx
+                if rep_gen == 0:
+                    rep_gen = int(gen.sum().item())
+                if float(lg[ctx].sum().item()) != 0.0:
+                    continue                     # fixed context-ligand obstacles present
+                n_metal_only += 1
+                if int((lg[gen].sum(dim=0) > 0).sum().item()) >= 2:
+                    n_eligible += 1
+            if n_metal_only > 0:
+                assert n_eligible > 0, (
+                    "project_enabled=True with metal-only context but no complex "
+                    "has generated atoms spanning >=2 ligand groups: the exclusion "
+                    "shell has no eligible generated<->generated pairs and would "
+                    "silently no-op. See src/projection.py / Prompt 12.")
+                print(f"projection: active, {rep_gen} gen atoms "
+                      f"({n_eligible}/{n_metal_only} metal-only complexes have "
+                      f"eligible gen<->gen pairs)")
+            else:
+                print(f"projection: active, {rep_gen} gen atoms "
+                      f"(context ligands present; gen<->context obstacles)")
         generate_ligand(data, model, device, bs, outdir=outdir, resample_r=resample_r,
                         project_enabled=project_enabled, d_min_start=d_min_start,
                         d_min_end=d_min_end)

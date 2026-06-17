@@ -161,17 +161,47 @@ class EDM(torch.nn.Module):
                     batch_seg=batch_seg,
                     ligand_site=ligand_site,
                 )
-                # Hard exclusion-shell projection (Christopher et al. 2024)
+                # Hard exclusion-shell projection (Christopher et al. 2024).
+                #
+                # SCALE: the reverse loop runs in NORMALIZED coordinates
+                # (positions ÷ norm_values[0]; see self.normalize), but
+                # project_exclusion_shell -- and its d_min / BOND_PERCEPTION_CUTOFFS
+                # -- are defined in Ångströms, because the shell must enforce the
+                # same real-space separation get_bond_order later perceives on the
+                # un-normalized output. So round-trip: un-normalize z_pos to Å,
+                # project in Å, re-normalize the result. WITHOUT this the shell
+                # would push atoms norm_values[0]× too far (~19 Å for d_min≈1.9 at
+                # factor 10), scattering every complex into garbage -- an active-
+                # but-broken shell that reads as model incapacity, not a no-op.
                 if project_enabled and ligand_group is not None:
                     cur_d_min = d_min_schedule(s, timesteps, d_min_start, d_min_end)
                     z_pos = z[:, :self.n_dims]
-                    z_pos_proj = project_exclusion_shell(
-                        z_pos, ligand_group, context, cur_d_min)
-                    # Only update generated atom positions
+                    pos_A = z_pos * self.norm_values[0]              # normalized -> Å
+                    pos_proj_A = project_exclusion_shell(
+                        pos_A, ligand_group, context, cur_d_min)
+                    z_pos_proj = pos_proj_A / self.norm_values[0]    # Å -> normalized
+                    # Write the projected positions BACK into the working latent so
+                    # every subsequent reverse step sees the corrected geometry
+                    # (generated atoms only; context is fixed). This mutation is the
+                    # whole point -- the shell is a no-op if z is not reassigned.
                     z = torch.cat([
                         z_pos * context + z_pos_proj * ligand_diff,
                         z[:, self.n_dims:]
                     ], dim=1)
+                    # One-time proof the shell did real work (vs a silent no-op),
+                    # emitted on the first step it actually displaces a generated
+                    # atom. If a project_enabled run never prints this, the shell
+                    # moved nothing -- the generate-time eligibility guard exists to
+                    # prevent exactly that.
+                    if not getattr(self, '_projection_logged', False):
+                        disp = (pos_proj_A - pos_A).norm(dim=-1)
+                        moved = disp > 1e-4
+                        if moved.any():
+                            self._projection_logged = True
+                            print(f"[edm] exclusion-shell projection active: moved "
+                                  f"{int(moved.sum().item())}/{int(ligand_diff.sum().item())} "
+                                  f"gen atoms (max {float(disp[moved].max().item()):.2f} Å) "
+                                  f"at d_min {d_min_start:.2f}->{d_min_end:.2f} Å")
                 # Re-noise back to level t (unless last iteration)
                 if u < resample_r - 1:
                     gamma_s = self.gamma(s_array)
