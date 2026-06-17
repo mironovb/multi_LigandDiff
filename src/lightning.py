@@ -16,6 +16,11 @@ from torch_geometric.loader import DataLoader
 from torch_scatter import scatter_add
 from molSimplify.Classes.mol3D import mol3D
 from molSimplify.Classes.ligand import ligand_breakdown
+
+
+def _safe_div(num, den):
+    """Divide, returning 0.0 when the denominator is 0 (avoids NaN/ZeroDivisionError)."""
+    return float(num) / den if den else 0.0
         
 
 class DDPM(pl.LightningModule):
@@ -323,9 +328,9 @@ class DDPM(pl.LightningModule):
                             #write_xyz_file(positions, atom_types,f'{outdir}/{b}_{i}',metal,'N/A')
         
         
-        metrics={'valid_ligand':validity/total_ligands,
-                 'connected_ligand':connectivity/validity,
-                 'valid_complex':valid_comp/len(dataset)}
+        metrics={'valid_ligand':_safe_div(validity, total_ligands),
+                 'connected_ligand':_safe_div(connectivity, validity),
+                 'valid_complex':_safe_div(valid_comp, len(dataset))}
         print(f'Finished sampling on  {len(dataset)} samples')
         print('Metrics for sampling:')
         print(metrics)
