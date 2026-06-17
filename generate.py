@@ -1,8 +1,10 @@
 import argparse
 import os
+import json
 import numpy as np
 import tempfile
 import ast
+from collections import Counter
 from itertools import combinations
 import torch
 from src import const
@@ -235,6 +237,8 @@ def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes'
     dataloader = DataLoader(data, batch_size=batch_size, shuffle=False)
     ligand_metrics=BasicLigandMetrics()
     num=0
+    reasons = Counter()
+    attempts = 0
     for b, data in enumerate(dataloader):
         pos_orginal=data['pos']
         batch_seg=data.batch
@@ -250,6 +254,9 @@ def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes'
                                               project_enabled=project_enabled,
                                               d_min_start=d_min_start, d_min_end=d_min_end)
         except utils.FoundNaNException as e:
+            batch_count = int(batch_size)
+            attempts += batch_count
+            reasons['nan'] += batch_count
             continue
 
         x = chain_batch[0][ :, :3]
@@ -257,34 +264,38 @@ def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes'
         one_hot = chain_batch[0][ :, 3:]
         unique_indices = torch.unique(batch_seg)
         for i in unique_indices:
+            attempts += 1
             n_fragment=int(torch.sum(context[batch_seg==i].squeeze()).item())
             positions=x[batch_seg==i]
             atom_types=one_hot[batch_seg==i].argmax(dim=1)
             metal=metals[i]
             overlapping,liglist=sanitycheck(positions, atom_types,metal)
             total_atoms=sum(len(lig) for lig in liglist)+1
-            if not overlapping and total_atoms==natoms[i].item():
-                rdmols=[build_mol(positions[lig],atom_types[lig]) for lig in liglist if any(item >= n_fragment for item in lig)] 
-                valid= ligand_metrics.compute_validity(rdmols)
-                connected=ligand_metrics.compute_connectivity(valid)
-                if len(connected)==len(rdmols):
-                    num+=1
-                    write_xyz_file(positions, atom_types,f'{outdir}/noH/{b}_{i}_{labels[i]}',metal,n_fragment)
+            if overlapping:
+                reasons['overlap'] += 1
+                continue
+            if total_atoms != natoms[i].item():
+                reasons['atom_count'] += 1
+                continue
+            rdmols=[build_mol(positions[lig],atom_types[lig]) for lig in liglist if any(item >= n_fragment for item in lig)]
+            valid = ligand_metrics.compute_validity(rdmols)
+            if len(valid) != len(rdmols):
+                reasons['sanitize'] += 1
+                continue
+            connected = ligand_metrics.compute_connectivity(valid)
+            if len(connected) != len(rdmols):
+                reasons['disconnected'] += 1
+                continue
+            reasons['valid'] += 1
+            num += 1
+            write_xyz_file(positions, atom_types,f'{outdir}/noH/{b}_{i}_{labels[i]}',metal,n_fragment)
 
-                    # with tempfile.NamedTemporaryFile() as tmp:
-                    #     tmp_file = tmp.name
-                    #     write_xyz_file(positions, atom_types, tmp_file,metal,n_fragment='nan')
-                    #     mol=mol3D()
-                    #     mol.readfromxyz(f'{tmp_file}.xyz')
-                    #     liglist,ligdent,ligcon=ligand_breakdown(mol,silent=True,BondedOct=False,transition_metals_only=False)
-                    
-                    # LD_c=ast.literal_eval(labels[i].split('_')[-2])
-                    # LD_g=ast.literal_eval(labels[i].split('_')[-1])
-                    # LD_g.extend(LD_c)
-                    # if sorted(ligdent)==sorted(LD_g):
-                    #     num+=1
-                    #     write_xyz_file(positions, atom_types,f'{outdir}/noH/{b}_{i}_{labels[i]}',metal,n_fragment)
-    print(f'Totally {num} valid complexes are generated and saved in {outdir}/noH') 
+    summary = {'attempts': attempts, 'valid': num, **dict(reasons)}
+    os.makedirs(outdir, exist_ok=True)
+    with open(f'{outdir}/rejection_summary.json', 'w') as fh:
+        json.dump(summary, fh, indent=2)
+    print(f'rejection breakdown: {summary}')
+    print(f'Totally {num} valid complexes are generated and saved in {outdir}/noH')
 
 
 

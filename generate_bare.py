@@ -18,8 +18,10 @@ Usage:
 
 import argparse
 import os
+import json
 import numpy as np
 import torch
+from collections import Counter
 from src import const
 from src import utils
 from src.lightning import DDPM
@@ -178,6 +180,8 @@ def generate_ligand(data, model, device, batch_size=32, outdir='generated',
     dataloader = DataLoader(data, batch_size=batch_size, shuffle=False)
     ligand_metrics = BasicLigandMetrics()
     num = 0
+    reasons = Counter()
+    attempts = 0
     for b, data in enumerate(dataloader):
         pos_original = data['pos']
         batch_seg = data.batch
@@ -195,6 +199,9 @@ def generate_ligand(data, model, device, batch_size=32, outdir='generated',
                 project_enabled=project_enabled,
                 d_min_start=d_min_start, d_min_end=d_min_end)
         except utils.FoundNaNException:
+            batch_count = int(bs)
+            attempts += batch_count
+            reasons['nan'] += batch_count
             continue
 
         x = chain_batch[0][:, :3]
@@ -202,24 +209,41 @@ def generate_ligand(data, model, device, batch_size=32, outdir='generated',
         one_hot = chain_batch[0][:, 3:]
         unique_indices = torch.unique(batch_seg)
         for i in unique_indices:
+            attempts += 1
             n_fragment = int(torch.sum(context[batch_seg == i].squeeze()).item())
             positions = x[batch_seg == i]
             atom_types = one_hot[batch_seg == i].argmax(dim=1)
             metal = metals[i]
             overlapping, liglist = sanitycheck(positions, atom_types, metal)
             total_atoms = sum(len(lig) for lig in liglist) + 1
-            if not overlapping and total_atoms == natoms[i].item():
-                rdmols = [build_mol(positions[lig], atom_types[lig])
-                          for lig in liglist
-                          if any(item >= n_fragment for item in lig)]
-                valid = ligand_metrics.compute_validity(rdmols)
-                connected = ligand_metrics.compute_connectivity(valid)
-                if len(connected) == len(rdmols):
-                    num += 1
-                    write_xyz_file(positions, atom_types,
-                                   f'{outdir}/noH/{b}_{i}_{labels[i]}',
-                                   metal, n_fragment)
+            if overlapping:
+                reasons['overlap'] += 1
+                continue
+            if total_atoms != natoms[i].item():
+                reasons['atom_count'] += 1
+                continue
+            rdmols = [build_mol(positions[lig], atom_types[lig])
+                      for lig in liglist
+                      if any(item >= n_fragment for item in lig)]
+            valid = ligand_metrics.compute_validity(rdmols)
+            if len(valid) != len(rdmols):
+                reasons['sanitize'] += 1
+                continue
+            connected = ligand_metrics.compute_connectivity(valid)
+            if len(connected) != len(rdmols):
+                reasons['disconnected'] += 1
+                continue
+            reasons['valid'] += 1
+            num += 1
+            write_xyz_file(positions, atom_types,
+                           f'{outdir}/noH/{b}_{i}_{labels[i]}',
+                           metal, n_fragment)
 
+    summary = {'attempts': attempts, 'valid': num, **dict(reasons)}
+    os.makedirs(outdir, exist_ok=True)
+    with open(f'{outdir}/rejection_summary.json', 'w') as fh:
+        json.dump(summary, fh, indent=2)
+    print(f'rejection breakdown: {summary}')
     print(f'Totally {num} valid complexes generated in {outdir}/noH')
 
 
