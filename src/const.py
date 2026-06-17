@@ -16,6 +16,18 @@ MAX_DENTICITY = 4
 # from the curated lanthanide dataset ligand inventory.
 DENTICITY_PRIOR = {1: 0.677, 2: 0.180, 3: 0.140, 4: 0.003}
 
+# Minimum heavy (non-H) atoms a ligand of a given denticity needs to be chemically
+# buildable: the donor atoms plus the smallest skeleton that can bridge them. Used as a
+# floor on the de-novo atom budget in generate.py so the model is never handed too few
+# atoms to form the donor motif (the old random budget could give a bidentate slot just
+# 2 atoms, too few for a nitrate).
+#   1 -> 1  single-atom donor (water O / oxo / halide)
+#   2 -> 4  nitrate, N + 3 O; >=4 is required so a nitrate is buildable at all (also fits
+#           acetate-type carboxylates). A 3-atom budget cannot form N + 3 O.
+#   3 -> 5  three donors + a minimal (~2-atom) bridging skeleton
+#   4 -> 7  four donors + a minimal (~3-atom) bridging skeleton
+DENTICITY_MIN_ATOMS = {1: 1, 2: 4, 3: 5, 4: 7}
+
 
 # Atom idx for one-hot encoding
 ATOM2IDX = {'C': 0, 'N': 1, 'O': 2, 'S': 3, 'Br': 4, 'Cl': 5, 'P': 6, 'F': 7}

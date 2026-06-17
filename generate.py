@@ -224,10 +224,17 @@ def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENT
             gen_ligand_groups=[]
             gen_ligand_coord_sites=[]
             for k,num_coord_site in zip(ligand_index,LD_g):
+                # Chemistry-derived atom budget: a denticity-indexed floor (enough atoms
+                # for the donors + bridging skeleton) plus a modest seeded-random spread,
+                # so the model still sees size variety but is never handed too few atoms
+                # to build the donor motif (a bidentate slot can now fit a nitrate, N+3O=4).
+                floor=const.DENTICITY_MIN_ATOMS.get(num_coord_site,num_coord_site)
                 if num_coord_site<3:
-                    g_ligand_size=np.random.randint(num_coord_site,10)
+                    g_ligand_size=floor+int(rng.integers(0,6))
                 else:
+                    # Tridentate+ is already chemistry-scaled to a larger range; keep it.
                     g_ligand_size=get_ligand_size(ligand_size,startnum=10,endnum=30)
+                g_ligand_size=max(g_ligand_size,floor,num_coord_site)
                 assert g_ligand_size>= num_coord_site,"The assigned ligand size is smaller than the denticity of the generated ligand. Please assign a larger ligand size."
                 gen_ligand_group=torch.zeros(g_ligand_size, const.MAX_LIGANDS)
                 gen_ligand_group[:,k]=1
