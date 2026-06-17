@@ -1,44 +1,62 @@
+# ============================================================================
+# Reference config for the converged "ln" fine-tune
+# (gvp_dynamics, 192 / 5 / l2 / polynomial_2; best checkpoint
+#  ln_finetuned_epoch=48.ckpt).
+#
+# WHAT READS THIS FILE
+#   * train.py (from-scratch training) loads it as the default --config and
+#     overwrites its own argparse defaults with these keys (train.py:152-160).
+#   * finetune.py — which actually produced the converged ln checkpoint — does
+#     NOT read this file. It takes every hyperparameter from its argparse
+#     defaults plus the finetune_*.sbatch flags (finetune.py:191-217).
+#
+# The values below mirror that converged fine-tune so train.py rebuilds the
+# SAME model instead of the old 32 / 2 / vlb / learned smoke-test template
+# (a 227-layer state_dict will not load into a 192/5 checkpoint).
+# Sources: finetune.py model block (lines 159-216) + finetune_normal.sbatch.
+# ============================================================================
+
 exp_name: 'Multi_LigandDiff'
 checkpoints: models
 logs: logs
-n_epochs: 2
-resume: 
+n_epochs: 100          # finetune ran --epochs 100 with EarlyStopping(patience=15); converged at epoch 48
+resume:
 wandb_entity: null
 
 
-data: path to data
-train_data: path to train data
-val_data: path to validation data
+# Converged fine-tune used these tensors (finetune_normal.sbatch --train_data/--val_data):
+data: data
+train_data: data/train_ln.pt
+val_data: data/val_ln.pt
 
 
-hidden_nf: 32
+hidden_nf: 192         # finetune.py:159  (was 32)
 activation: silu
-n_layers: 2
+n_layers: 5            # finetune.py:160  (was 2)
 attention: True
 
-normalization_factor: 100
+# normalization_factor: see prompt 20
+#   finetune.py:202 currently passes 1; the old template's value of 100 was wrong.
+#   Left out as a live key so train.py falls back to its argparse default
+#   (1, train.py:130); the canonical value is resolved in prompt 20.
 
 diffusion_steps: 500
-diffusion_noise_schedule: learned
+diffusion_noise_schedule: polynomial_2   # finetune.py:206  (was learned)
 diffusion_noise_precision: 1.0e-5
-diffusion_loss_type: vlb
+diffusion_loss_type: l2                  # finetune.py:208  (was vlb)
 normalize_factors: [10, 4, 1]
 
 
-lr: 1.0e-4
-batch_size: 2
+lr: 1.0e-4             # finetune.py lr_head=1e-4 (backbone fine-tuned at lr_backbone=1e-5)
+batch_size: 256        # finetune_normal.sbatch --batch_size 256  (was 2)
 device: gpu
 model: gvp_dynamics
-test_epochs: 1
+test_epochs: 10        # finetune.py:213  (was 1)
 n_stability_samples: 1
 center_of_mass: context
-clip_grad: False
+clip_grad: True        # finetune.py:216  (was False)
 
 drop_rate: 0.2
 
 max_ligands: 10
 # Note: ligand_node_nf = max_ligands + 1 = 11
-
-
-
-
