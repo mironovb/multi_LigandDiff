@@ -169,10 +169,15 @@ def make_mol_openbabel(positions, atom_types):
         obConversion.WriteFile(ob_mol, f'{tmp_file}.sdf')
         # Read sdf file with RDKit
         tmp_mol = Chem.SDMolSupplier(f'{tmp_file}.sdf', sanitize=False)[0]
-    # Build new molecule. This is a workaround to remove radicals.
+    # Build new molecule. This is a workaround to remove radicals while
+    # preserving the formal charges (and isotopes) OpenBabel perceived, so
+    # charged donors such as nitrate can later sanitize in the validity gate.
     mol = Chem.RWMol()
     for atom in tmp_mol.GetAtoms():
-        mol.AddAtom(Chem.Atom(atom.GetSymbol()))
+        new_atom = Chem.Atom(atom.GetSymbol())
+        new_atom.SetFormalCharge(atom.GetFormalCharge())
+        new_atom.SetIsotope(atom.GetIsotope())
+        mol.AddAtom(new_atom)
     mol.AddConformer(tmp_mol.GetConformer(0))
 
     for bond in tmp_mol.GetBonds():
