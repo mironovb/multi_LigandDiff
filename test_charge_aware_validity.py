@@ -23,3 +23,9 @@ def test_nitrate_fails_without_charges():
     except Exception:
         raised = True
     assert raised, "stripping charges should make nitrate N hit the valence error"
+
+
+def test_gate_accepts_nitrate():
+    from src.molecule_builder import BasicLigandMetrics
+    # _nitrate() built WITH charges (as make_mol_openbabel now yields after prompt 01)
+    assert len(BasicLigandMetrics().compute_validity([_nitrate()])) == 1

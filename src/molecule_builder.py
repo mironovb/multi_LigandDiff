@@ -194,15 +194,18 @@ class BasicLigandMetrics(object):
         self.connectivity_thresh = connectivity_thresh
 
     def compute_validity(self, generated):
-        """ generated: list of couples (positions, atom_types)"""
-        valid=[]
+        """generated: list of RDKit mols (positions, bonds already set)."""
+        from src.molecule_builder import reset_dative_bonds
+        valid = []
+        flags = Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_ADJUSTHS
         for i in generated:
             try:
-                Chem.SanitizeMol(i)
+                m = reset_dative_bonds(i)
+                m.UpdatePropertyCache(strict=False)
+                Chem.SanitizeMol(m, sanitizeOps=flags)
                 valid.append(i)
-            except ValueError:
+            except (ValueError, RuntimeError):
                 continue
-
         return valid
 
     def compute_connectivity(self, generated):
