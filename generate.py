@@ -1,3 +1,24 @@
+"""Generate new ligands for a metal complex with the LigandDiff diffusion model.
+
+Two optional, opt-in *seeding* aids steer the de-novo generation toward realistic,
+hard-to-compose targets (the three nitrates the bare-Eu run keeps failing on):
+
+  --donor_spec        fix the ELEMENT of each metal-touching donor atom (Prompt 09).
+  --ligand_templates  seed a whole small ligand SKELETON per slot (Prompt 10): the
+                      element identity of every atom, the atom count, and -- optionally
+                      -- a rough internal geometry, from a library of tagged fragments
+                      (built-in: nitrate / water / carboxylate; extendable via JSON).
+
+IMPORTANT -- both are *seeding aids for the diffusion sampler, not hard constraints*.
+The model can still move atoms and change types: the sampler re-initialises the whole
+generated region from N(0, I) at the start of reverse diffusion, so the seeded element
+identities and coordinates bias the input *representation* rather than binding the
+output. What does take effect immediately is structural: --ligand_templates overrides
+the per-slot atom-count budget (a nitrate slot becomes exactly 4 atoms) and, like
+--donor_spec, restricts generation to the denticity partitions the spec can fill.
+Hard, valence-correct enforcement (inpainting / a valence type-channel mask) is Prompt 16.
+"""
+
 import argparse
 import os
 import json
@@ -9,6 +30,7 @@ from itertools import combinations
 import torch
 from src import const
 from src import utils
+from src import templates
 from src.lightning import DDPM
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data
@@ -60,6 +82,27 @@ parser.add_argument('--donor_spec', type=str, default=None,
                          "When set, only denticity partitions the spec can fill are generated "
                          "(the csd prior is bypassed); geometry and all non-donor atoms are still "
                          "diffused. Omit for the default all-zeros de-novo behaviour.")
+parser.add_argument('--ligand_templates', type=str, default=None,
+                    help="Optional: seed whole ligand SKELETONS (element identity of EVERY atom, "
+                         "the atom count, and -- with --template_init_coords -- a rough geometry) "
+                         "from a library of tagged fragments, so the model places/refines a known "
+                         "fragment instead of inventing it. Two forms: inline assignment "
+                         "'nitrate;nitrate;nitrate' (';' separates generated ligand slots, "
+                         "mirroring --donor_spec) using built-in tags "
+                         "(see src.templates.TEMPLATES: nitrate, water, carboxylate); or a path to "
+                         "a '.json' file {'templates': {tag: {...}}, 'assign': [tag, ...]} that "
+                         "extends the built-in library and assigns slots. The template's atom count "
+                         "OVERRIDES the Prompt-08 budget for that slot, and only denticity "
+                         "partitions the assignment can fill are generated (csd prior bypassed). "
+                         "Composable with --donor_spec (a template wins on the donor rows it "
+                         "shares). SEEDING AID, not a hard constraint -- see the module docstring. "
+                         "Omit for the default all-zeros de-novo behaviour.")
+parser.add_argument('--template_init_coords', type=eval, default=False,
+                    help='When --ligand_templates is set, also initialise the generated '
+                         'coordinates of each templated slot from the template geometry (centred '
+                         'at the origin), instead of zeros. Still fully diffused (the sampler '
+                         're-noises the generated region), so this is a starting hint, not a '
+                         'constraint. Default False.')
 
 
 atom2idx=const.ATOM2IDX
@@ -252,12 +295,90 @@ def donor_elements_for_partition(donor_spec, LD_g):
     return elements
 
 
+def parse_ligand_templates(spec_str):
+    """Parse the --ligand_templates string into a structured, validated assignment.
+
+    Two accepted forms (opt-in; default None keeps the all-zeros de-novo behaviour):
+
+      inline     'nitrate;nitrate;nitrate'  -> assign the named template to each generated
+                                               ligand slot, in build order. ';' separates
+                                               ligand slots (mirroring --donor_spec). Tags
+                                               must be keys of the merged library (built-ins
+                                               in src.templates.TEMPLATES).
+      JSON file  'lib.json'                  -> a path ending in '.json' holding a JSON object
+                                               {"templates": {tag: {...}}, "assign": [tag, ...]}
+                                               (alias "library" for "templates"). 'templates'
+                                               extends/overrides the built-in library; 'assign'
+                                               is the per-slot assignment. Lets a user define
+                                               and use custom skeletons without editing source.
+
+    Returns {'tags': [tag, ...], 'library': {tag: template_dict}}. Raises ValueError on an
+    empty spec/slot, an unknown tag, or a template whose element is outside const.ATOM2IDX
+    (element-symbol validity is enforced here, where const is available; src.templates does
+    only structural validation so it can stay dependency-free).
+    """
+    spec_str = spec_str.strip()
+    if not spec_str:
+        raise ValueError("--ligand_templates is empty")
+    extra = None
+    if spec_str.endswith('.json'):
+        if not os.path.isfile(spec_str):
+            raise ValueError(f"--ligand_templates JSON file not found: {spec_str}")
+        extra, tags = templates.load_library_json(spec_str)
+    else:
+        tags = [t.strip() for t in spec_str.split(';')]
+    if any(t == '' for t in tags):
+        raise ValueError(
+            f"--ligand_templates '{spec_str}' has an empty slot (stray/duplicate ';'?)")
+    library = templates.build_library(extra)
+    for t in tags:
+        if t not in library:
+            raise ValueError(
+                f"--ligand_templates references unknown template '{t}'; available: "
+                f"{sorted(library)} (extend via a JSON 'templates' map)")
+        for el in library[t]['elements']:
+            if el not in const.ATOM2IDX:
+                raise ValueError(
+                    f"template '{t}' element '{el}' is not a supported atom type; "
+                    f"choose from {sorted(const.ATOM2IDX)}")
+    return {'tags': tags, 'library': library}
+
+
+def templates_for_partition(ligand_templates, LD_g):
+    """Per-slot template tag (aligned to ``LD_g`` build order) for partition ``LD_g``, or None.
+
+    Matches iff the multiset of the assignment's template denticities equals the multiset of
+    LD_g (the same rule as --donor_spec per-ligand), then binds each LD_g slot to an assigned
+    template of equal denticity. Returns None when the assignment cannot fill this partition,
+    so the caller skips it -- exactly parallel to ``donor_elements_for_partition``.
+    """
+    lib = ligand_templates['library']
+    remaining = list(ligand_templates['tags'])
+    if sorted(lib[t]['denticity'] for t in remaining) != sorted(LD_g):
+        return None
+    per_slot = []
+    for d in LD_g:
+        match_idx = next((i for i, t in enumerate(remaining) if lib[t]['denticity'] == d), None)
+        if match_idx is None:
+            return None
+        per_slot.append(remaining.pop(match_idx))
+    return per_slot
+
+
+def templates_max_denticity(ligand_templates):
+    """Largest denticity any assigned template requires (for the --max_denticity check)."""
+    lib = ligand_templates['library']
+    return max(lib[t]['denticity'] for t in ligand_templates['tags'])
+
+
 def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENTICITY,
-                denticity_prior='uniform',rng=None,donor_spec=None):
+                denticity_prior='uniform',rng=None,donor_spec=None,
+                ligand_templates=None,template_init_coords=False):
     if rng is None:
         rng = np.random.default_rng()
     new_data=[]
     spec_matched = False
+    template_matched = False
     remaining_seen = set()
     for i in dataset:
         #context
@@ -286,10 +407,11 @@ def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENT
             continue
         remaining_seen.add(remaining)
         ld_options = const.denticity_partitions(remaining, max_denticity=max_denticity)
-        # A donor spec is authoritative: keep the full (capped) enumeration and filter it to
-        # spec-matching partitions in the loop below, so the CSD prior sampling is bypassed (it
-        # would otherwise throw away most of the partitions the spec is allowed to fill).
-        if denticity_prior == 'csd' and ld_options and donor_spec is None:
+        # A donor spec OR a template assignment is authoritative: keep the full (capped)
+        # enumeration and filter it to spec-matching partitions in the loop below, so the CSD
+        # prior sampling is bypassed (it would otherwise throw away most of the partitions the
+        # spec/templates are allowed to fill).
+        if denticity_prior == 'csd' and ld_options and donor_spec is None and ligand_templates is None:
             # Sample ONE partition for this context copy proportional to the CSD
             # prior. The dataset already holds n_samples copies of each context, so
             # this draws n_samples partitions ~ prior per context (vs. enumerating
@@ -306,21 +428,36 @@ def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENT
                     # This partition's denticity structure can't host the requested donor set.
                     continue
                 spec_matched = True
+            slot_templates = None
+            if ligand_templates is not None:
+                slot_templates = templates_for_partition(ligand_templates, LD_g)
+                if slot_templates is None:
+                    # No way to lay the assigned skeletons onto this partition's slots.
+                    continue
+                template_matched = True
             ligand_index=index[:len(LD_g)]
             gen_ligand_groups=[]
             gen_ligand_coord_sites=[]
-            for k,num_coord_site in zip(ligand_index,LD_g):
+            slot_layout=[]   # (row_start, n_rows, template_dict_or_None) per generated slot
+            row_cursor=0
+            for slot_pos,(k,num_coord_site) in enumerate(zip(ligand_index,LD_g)):
+                tpl = (ligand_templates['library'][slot_templates[slot_pos]]
+                       if slot_templates is not None else None)
                 # Chemistry-derived atom budget: a denticity-indexed floor (enough atoms
                 # for the donors + bridging skeleton) plus a modest seeded-random spread,
                 # so the model still sees size variety but is never handed too few atoms
                 # to build the donor motif (a bidentate slot can now fit a nitrate, N+3O=4).
+                # An assigned template OVERRIDES this budget with its exact atom count.
                 floor=const.DENTICITY_MIN_ATOMS.get(num_coord_site,num_coord_site)
-                if num_coord_site<3:
-                    g_ligand_size=floor+int(rng.integers(0,6))
+                if tpl is not None:
+                    g_ligand_size=len(tpl['elements'])
                 else:
-                    # Tridentate+ is already chemistry-scaled to a larger range; keep it.
-                    g_ligand_size=get_ligand_size(ligand_size,startnum=10,endnum=30)
-                g_ligand_size=max(g_ligand_size,floor,num_coord_site)
+                    if num_coord_site<3:
+                        g_ligand_size=floor+int(rng.integers(0,6))
+                    else:
+                        # Tridentate+ is already chemistry-scaled to a larger range; keep it.
+                        g_ligand_size=get_ligand_size(ligand_size,startnum=10,endnum=30)
+                    g_ligand_size=max(g_ligand_size,floor,num_coord_site)
                 assert g_ligand_size>= num_coord_site,"The assigned ligand size is smaller than the denticity of the generated ligand. Please assign a larger ligand size."
                 gen_ligand_group=torch.zeros(g_ligand_size, const.MAX_LIGANDS)
                 gen_ligand_group[:,k]=1
@@ -328,6 +465,8 @@ def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENT
                 gen_coord_site=torch.zeros(g_ligand_size)
                 gen_coord_site[:num_coord_site]=1
                 gen_ligand_coord_sites.append(gen_coord_site)
+                slot_layout.append((row_cursor,g_ligand_size,tpl))
+                row_cursor+=g_ligand_size
             gen_ligand_group=torch.cat(gen_ligand_groups,dim=0)
             gen_ligand_size=gen_ligand_group.shape[0]
             gen_ligand_x=torch.zeros(gen_ligand_size,3)
@@ -342,6 +481,20 @@ def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENT
                     f"{len(donor_elements)} specified for partition {LD_g}")
                 for slot, element in zip(donor_slots, donor_elements):
                     gen_ligand_onehot[slot, const.ATOM2IDX[element]] = 1
+            # Template seeding (applied AFTER donor_spec, so a template's whole skeleton wins
+            # on any donor rows the two specs share): set EVERY atom's element identity from
+            # the assigned template, and -- if --template_init_coords -- its starting geometry.
+            # The diffusion still re-noises this region, so it is a seed, not a constraint.
+            for row_start,n_rows,tpl in slot_layout:
+                if tpl is None:
+                    continue
+                for r,el in enumerate(tpl['elements']):
+                    gen_ligand_onehot[row_start+r]=0
+                    gen_ligand_onehot[row_start+r, const.ATOM2IDX[el]]=1
+                if template_init_coords and tpl.get('coords') is not None:
+                    coords=torch.tensor(tpl['coords'],dtype=gen_ligand_x.dtype)
+                    coords=coords-coords.mean(dim=0,keepdim=True)  # centre fragment at origin
+                    gen_ligand_x[row_start:row_start+n_rows]=coords
             new_x=torch.cat([x,gen_ligand_x],dim=0)
             new_context=torch.cat([torch.ones(x.shape[0]),torch.zeros(gen_ligand_size)],dim=0)
             new_ligand_diff=torch.cat([torch.zeros(x.shape[0]),torch.ones(gen_ligand_size)],dim=0)
@@ -364,6 +517,16 @@ def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENT
             f"Spec needs {wanted}; contexts (re)generate one of these donor counts: "
             f"{sorted(remaining_seen)} (capped at --max_denticity={max_denticity}). "
             f"Adjust the donor count / per-ligand denticities, --max_denticity, or the complex.")
+    if ligand_templates is not None and not template_matched:
+        wanted_dents = sorted(ligand_templates['library'][t]['denticity']
+                              for t in ligand_templates['tags'])
+        raise ValueError(
+            f"--ligand_templates could not be matched to any maskable context in this complex. "
+            f"Assignment {ligand_templates['tags']} needs slot denticities {wanted_dents}; "
+            f"contexts (re)generate one of these donor counts: {sorted(remaining_seen)} "
+            f"(capped at --max_denticity={max_denticity})"
+            f"{' and must also satisfy --donor_spec' if donor_spec is not None else ''}. "
+            f"Adjust the template assignment, --max_denticity, or the complex.")
     return new_data
 
 def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes',resample_r=1,
@@ -551,7 +714,8 @@ def add_H(org_xyz,gen_dir):
 
 def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add_Hs=False,resample_r=1,
          project_enabled=False,d_min_start=1.5,d_min_end=1.3,max_denticity=const.MAX_DENTICITY,
-         denticity_prior='uniform',seed=None,donor_spec=None):
+         denticity_prior='uniform',seed=None,donor_spec=None,
+         ligand_templates=None,template_init_coords=False):
     """
     Generate multiple new structures for each variation in a given complex
     Args:
@@ -566,6 +730,12 @@ def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add
         donor_spec: optional donor-atom identity spec (e.g. 'O,O;N,O,O,O' or 'N,N,O,O,O');
             seeds the element of each metal-touching donor atom. None = today's all-zeros
             de-novo behaviour. See parse_donor_spec / --donor_spec for the grammar.
+        ligand_templates: optional whole-skeleton seeding spec (e.g. 'nitrate;nitrate;nitrate'
+            or a path to a templates .json). Seeds every atom's element + the atom count of a
+            generated ligand slot from src.templates. None = no skeleton seeding. See
+            parse_ligand_templates / --ligand_templates. A SEEDING AID, not a hard constraint.
+        template_init_coords: when ligand_templates is set, also seed each templated slot's
+            starting coordinates from the template geometry (still diffused). Default False.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     rng = np.random.default_rng(seed)
@@ -585,10 +755,23 @@ def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add
                   "generating exactly the spec-matching partition(s).")
         print(f"[donor_spec] conditioning donor identities ({parsed_donor_spec['mode']}): "
               f"{parsed_donor_spec['groups']}")
+    parsed_templates = parse_ligand_templates(ligand_templates) if ligand_templates else None
+    if parsed_templates is not None:
+        max_t_dent = templates_max_denticity(parsed_templates)
+        if max_t_dent > max_denticity:
+            raise ValueError(
+                f"--ligand_templates assigns a {max_t_dent}-dentate template but "
+                f"--max_denticity={max_denticity}. Raise --max_denticity to >= {max_t_dent}.")
+        if denticity_prior == 'csd':
+            print("[ligand_templates] --denticity_prior csd is bypassed when --ligand_templates "
+                  "is set; generating exactly the template-matching partition(s).")
+        print(f"[ligand_templates] seeding skeletons (init_coords={template_init_coords}): "
+              f"{parsed_templates['tags']}")
     dataset=read_molecule(complex)*n_samples
     print(f'{len(dataset)} samples will be generated')
     data=reform_data(dataset,device,ligand_size=ligand_size,max_denticity=max_denticity,
-                     denticity_prior=denticity_prior,rng=rng,donor_spec=parsed_donor_spec)
+                     denticity_prior=denticity_prior,rng=rng,donor_spec=parsed_donor_spec,
+                     ligand_templates=parsed_templates,template_init_coords=template_init_coords)
     batch_size=min(batch_size,len(data))
     generate_ligand(data,model,device,batch_size,outdir=outdir,resample_r=resample_r,
                     project_enabled=project_enabled,d_min_start=d_min_start,d_min_end=d_min_end)
@@ -601,7 +784,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
     main(args.outdir,args.model,args.complex,args.batch_size,args.n_samples,args.ligand_sizes,args.add_Hs,args.resample_r,
          args.project_enabled,args.d_min_start,args.d_min_end,args.max_denticity,
-         args.denticity_prior,args.seed,args.donor_spec)
+         args.denticity_prior,args.seed,args.donor_spec,
+         args.ligand_templates,args.template_init_coords)
 
     
 

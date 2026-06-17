@@ -53,6 +53,8 @@ from generate import (
     reform_data,
     generate_ligand,
     add_H,
+    parse_ligand_templates,
+    templates_max_denticity,
     atom2idx,
     charges,
     metal_list,
@@ -211,12 +213,25 @@ def _accounting_note(subsets, total_raw_parts, total_eligible_parts,
 def run_mask_level(complex_path, model, outdir, mask_k, n_samples, batch_size,
                    ligand_size, resample_r, project_enabled, d_min_start,
                    d_min_end, add_Hs, max_denticity=const.MAX_DENTICITY,
-                   denticity_prior='uniform', seed=None):
+                   denticity_prior='uniform', seed=None,
+                   ligand_templates=None, template_init_coords=False):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     rng = np.random.default_rng(seed)
     if seed is not None:
         # Make the legacy global-numpy ligand-size draws reproducible too.
         np.random.seed(seed)
+    parsed_templates = parse_ligand_templates(ligand_templates) if ligand_templates else None
+    if parsed_templates is not None:
+        max_t_dent = templates_max_denticity(parsed_templates)
+        if max_t_dent > max_denticity:
+            raise ValueError(
+                f"--ligand_templates assigns a {max_t_dent}-dentate template but "
+                f"--max_denticity={max_denticity}. Raise --max_denticity to >= {max_t_dent}.")
+        if denticity_prior == 'csd':
+            print("[ligand_templates] --denticity_prior csd is bypassed when --ligand_templates "
+                  "is set; generating exactly the template-matching partition(s).")
+        print(f"[ligand_templates] seeding skeletons (init_coords={template_init_coords}): "
+              f"{parsed_templates['tags']}")
     data_list, n_ligands = read_molecule_maskk(complex_path, mask_k)
 
     # --- Honest denominator accounting (bookkeeping only; does NOT change what is
@@ -247,7 +262,9 @@ def run_mask_level(complex_path, model, outdir, mask_k, n_samples, batch_size,
 
     dataset = data_list * n_samples
     data = reform_data(dataset, device, ligand_size=ligand_size, max_denticity=max_denticity,
-                       denticity_prior=denticity_prior, rng=rng)
+                       denticity_prior=denticity_prior, rng=rng,
+                       ligand_templates=parsed_templates,
+                       template_init_coords=template_init_coords)
 
     # attempts_eligible is ground truth (len(data)): under 'uniform' it equals
     # n_samples x sum(eligible partitions); under 'csd' reform_data draws ONE
@@ -258,6 +275,13 @@ def run_mask_level(complex_path, model, outdir, mask_k, n_samples, batch_size,
     context_ligs = n_ligands - k
     note = _accounting_note(subsets, total_raw_parts, total_eligible_parts,
                             max_denticity, denticity_prior, n_samples)
+    if parsed_templates is not None:
+        # Templates further restrict generation to template-matching partitions, so
+        # attempts_eligible (= len(data), ground truth) is below n_samples x eligible
+        # partitions. Record that so the denominator stays honest.
+        tnote = (f"ligand_templates={parsed_templates['tags']}: generation restricted to "
+                 f"template-matching partitions (attempts_eligible reflects this)")
+        note = tnote if note.startswith('no partitions') else f"{note}; {tnote}"
 
     print(f'{attempts_eligible} sampling attempts (raw {attempts_raw}) will be '
           f'generated for mask_k={mask_k}')
@@ -286,6 +310,7 @@ def run_mask_level(complex_path, model, outdir, mask_k, n_samples, batch_size,
         'context_ligs': context_ligs,
         'max_denticity': max_denticity,
         'denticity_prior': denticity_prior,
+        'ligand_templates': parsed_templates['tags'] if parsed_templates else None,
         'attempts_raw': attempts_raw,
         'attempts_eligible': attempts_eligible,
         'valid': valid,
@@ -329,6 +354,17 @@ def main():
     p.add_argument('--seed', type=int, default=None,
                    help='Seed for partition-sampling + global numpy RNG for reproducible '
                         'runs. Default None = nondeterministic (existing behaviour).')
+    p.add_argument('--ligand_templates', type=str, default=None,
+                   help="Seed whole ligand SKELETONS per generated slot (Prompt 10): inline "
+                        "'nitrate;nitrate;nitrate' (built-in tags: nitrate/water/carboxylate) "
+                        "or a path to a templates '.json' bundling {'templates':{...}, "
+                        "'assign':[...]}. Overrides the per-slot atom-count budget and restricts "
+                        "generation to template-matching denticity partitions. A seeding aid, "
+                        "not a hard constraint -- see generate.py. Default None (de-novo).")
+    p.add_argument('--template_init_coords', type=eval, default=False,
+                   help='When --ligand_templates is set, also initialise each templated slot '
+                        "from the template geometry (centred at origin) instead of zeros. Still "
+                        'fully diffused (a starting hint, not a constraint). Default False.')
     args = p.parse_args()
 
     tag = 'all' if str(args.mask_k) == 'all' else str(int(args.mask_k))
@@ -337,7 +373,8 @@ def main():
                    args.n_samples, args.batch_size, args.ligand_sizes,
                    args.resample_r, args.project_enabled, args.d_min_start,
                    args.d_min_end, args.add_Hs, args.max_denticity,
-                   args.denticity_prior, args.seed)
+                   args.denticity_prior, args.seed,
+                   args.ligand_templates, args.template_init_coords)
     print('Done!')
 
 
