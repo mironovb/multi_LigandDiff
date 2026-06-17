@@ -37,6 +37,9 @@ parser.add_argument('--d_min_start', type=float, default=1.5,
                     help='Exclusion shell d_min at high noise (start of reverse)')
 parser.add_argument('--d_min_end', type=float, default=1.3,
                     help='Exclusion shell d_min at low noise (end of reverse)')
+parser.add_argument('--max_denticity', type=int, default=const.MAX_DENTICITY,
+                    help='Chelate cap: max donors one generated ligand binds through '
+                         '(caps the denticity partitions handed to the model)')
 
 
 atom2idx=const.ATOM2IDX
@@ -166,7 +169,7 @@ def get_ligand_size(ligand_size='random',startnum=1,endnum=10):
     return ligand_size
 
 
-def reform_data(dataset,device,ligand_size='random'):
+def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENTICITY):
     new_data=[]
     for i in dataset:
         #context
@@ -193,7 +196,7 @@ def reform_data(dataset,device,ligand_size='random'):
         remaining = target_cn - cn_c
         if remaining <= 0:
             continue
-        ld_options = const.denticity_partitions(remaining)
+        ld_options = const.denticity_partitions(remaining, max_denticity=max_denticity)
         for LD_g in ld_options:
             ligand_index=index[:len(LD_g)]
             gen_ligand_groups=[]
@@ -414,7 +417,7 @@ def add_H(org_xyz,gen_dir):
 
 
 def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add_Hs=False,resample_r=1,
-         project_enabled=False,d_min_start=1.5,d_min_end=1.3):
+         project_enabled=False,d_min_start=1.5,d_min_end=1.3,max_denticity=const.MAX_DENTICITY):
     """
     Generate multiple new structures for each variation in a given complex
     Args:
@@ -427,7 +430,7 @@ def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dataset=read_molecule(complex)*n_samples
     print(f'{len(dataset)} samples will be generated')
-    data=reform_data(dataset,device,ligand_size=ligand_size)
+    data=reform_data(dataset,device,ligand_size=ligand_size,max_denticity=max_denticity)
     batch_size=min(batch_size,len(data))
     generate_ligand(data,model,device,batch_size,outdir=outdir,resample_r=resample_r,
                     project_enabled=project_enabled,d_min_start=d_min_start,d_min_end=d_min_end)
@@ -439,7 +442,7 @@ def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add
 if __name__ == '__main__':
     args = parser.parse_args()
     main(args.outdir,args.model,args.complex,args.batch_size,args.n_samples,args.ligand_sizes,args.add_Hs,args.resample_r,
-         args.project_enabled,args.d_min_start,args.d_min_end)
+         args.project_enabled,args.d_min_start,args.d_min_end,args.max_denticity)
 
     
 

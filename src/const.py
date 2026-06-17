@@ -8,6 +8,10 @@ TORCH_INT = torch.int8
 
 MAX_LIGANDS = 10
 
+# Max donors a single ligand realistically binds through (chelate cap). Real Ln
+# complexes are dominated by mono/bi/tri-dentate; >4 partitions are over-generation.
+MAX_DENTICITY = 4
+
 
 # Atom idx for one-hot encoding
 ATOM2IDX = {'C': 0, 'N': 1, 'O': 2, 'S': 3, 'Br': 4, 'Cl': 5, 'P': 6, 'F': 7}
@@ -227,7 +231,7 @@ COLORS = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8','C9','C10']
 RADII = [0.77, 0.77, 0.77, 0.77, 0.77, 0.77, 0.77, 0.77, 0.77,0.77,0.77]
 
 
-def denticity_partitions(remaining_cn, max_denticity=10):
+def denticity_partitions(remaining_cn, max_denticity=MAX_DENTICITY):
     """Generate all integer partitions of remaining_cn into parts <= max_denticity, sorted descending.
 
     This replaces the hardcoded cn_oct and cn_nonoct dicts for arbitrary CN.

@@ -52,6 +52,9 @@ parser.add_argument('--resample_r', type=int, default=1)
 parser.add_argument('--project_enabled', type=eval, default=False)
 parser.add_argument('--d_min_start', type=float, default=1.5)
 parser.add_argument('--d_min_end', type=float, default=1.3)
+parser.add_argument('--max_denticity', type=int, default=const.MAX_DENTICITY,
+                    help='Chelate cap: max donors one generated ligand binds through '
+                         '(caps the denticity partitions handed to the model)')
 
 # Chemically reasonable LD_g partitions for CN=9 lanthanides.
 # Limited to <=5 ligands with denticities 1-4.
@@ -79,7 +82,8 @@ def read_bare_metal(filename):
 
 
 def build_data_objects(metal_elem, metal_pos, target_cn, n_samples,
-                       ligand_size='random', device='cpu'):
+                       ligand_size='random', device='cpu',
+                       max_denticity=const.MAX_DENTICITY):
     """Create Data objects for total generation (CN_c=0).
 
     For each selected LD_g partition and each sample, creates one Data
@@ -95,10 +99,10 @@ def build_data_objects(metal_elem, metal_pos, target_cn, n_samples,
     if target_cn == 9:
         ld_options = SELECTED_LD9
     else:
-        all_parts = const.denticity_partitions(target_cn)
-        # Filter to <=5 ligands, max denticity 4
-        ld_options = [p for p in all_parts
-                      if len(p) <= 5 and max(p) <= 4]
+        # denticity_partitions already caps each part at max_denticity (chelate cap);
+        # here we additionally limit the ligand count to <=5.
+        all_parts = const.denticity_partitions(target_cn, max_denticity=max_denticity)
+        ld_options = [p for p in all_parts if len(p) <= 5]
         if not ld_options:
             ld_options = all_parts[:10]  # fallback to first 10
 
@@ -258,7 +262,7 @@ def main():
 
     data = build_data_objects(
         metal_elem, metal_pos, args.target_cn, args.n_samples,
-        args.ligand_sizes, device)
+        args.ligand_sizes, device, args.max_denticity)
     print(f"{len(data)} total Data objects created")
 
     batch_size = min(args.batch_size, len(data))
