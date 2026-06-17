@@ -18,8 +18,11 @@
 # and high-mask configs are over-represented:
 #
 #   python -u prepare_training_data.py --cif_dir <cifs> \
-#       --out data/train_ln_curriculum.pt --val_out data/val_ln_curriculum.pt \
-#       --mask_curriculum quadratic --force_all_masked True --max_augment 30 --workers 16
+#       --output_dir data_curriculum \
+#       --mask_curriculum quadratic --force_all_masked --max_augment 30 --workers 16
+#   (writes data_curriculum/train_ln.pt + val_ln.pt; the val split is --val_fraction,
+#    default 0.1 -- there is no separate train/val path flag, only --output_dir.
+#    --force_all_masked is a store_true flag (default on); --no_force_all_masked ablates it.)
 #
 # Then submit this job. Like the original fine-tune it spans the 4 h preemptible wall
 # across resubmissions; finetune.py supports --resume_from_checkpoint for that.
@@ -38,8 +41,8 @@ echo "Start: $(date)"
 echo "Host: $(hostname)"
 nvidia-smi
 
-TRAIN=data/train_ln_curriculum.pt
-VAL=data/val_ln_curriculum.pt
+TRAIN=data_curriculum/train_ln.pt
+VAL=data_curriculum/val_ln.pt
 if [ ! -f "$TRAIN" ]; then
     echo "ERROR: $TRAIN not found -- run STEP 0 (curriculum re-prep) first."; exit 1
 fi

@@ -20,8 +20,10 @@
 #   - projection above bond cutoff + gen<->gen (prompts 11-13) -> active in bare-metal
 #   - valence-aware type masking            (prompt 16)      -> N cannot take 4 neighbours
 #
-# Requires those prompts landed (the flags below must exist). --donor_spec encodes the
+# Requires those prompts landed (the flags below must exist). --ligand_templates seeds the
 # reference first shell (2 bidentate-O ligands + 3 nitrates); drop it for unconditioned.
+# (generate_design_test.py conditions via --ligand_templates, the seeding route; the hard
+#  --donor_spec constraint lives in generate.py, a different entry point.)
 # nounset trap: do not `set -euo pipefail` + `source ~/.bashrc`.
 
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
@@ -55,7 +57,8 @@ python -u generate_design_test.py \
     --d_min_start 2.2 \
     --d_min_end 1.9 \
     --valence_guard True
-    # optional: --donor_spec "O,O;O,O;N,O,O,O;N,O,O,O;N,O,O,O"
+    # optional conditioning (Prompt 10): add a trailing '\' to the line above, then:
+    #   --ligand_templates "carboxylate;carboxylate;nitrate;nitrate;nitrate"
 
 echo "=== maskall_fixed valid count ==="
 ls "$OUT"/maskall/noH/ 2>/dev/null | wc -l

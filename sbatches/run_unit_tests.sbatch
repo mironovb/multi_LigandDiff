@@ -32,8 +32,10 @@ python -m py_compile generate.py generate_design_test.py generate_bare.py prepar
     && echo "py_compile OK" || echo "py_compile: some files not present yet (expected before their prompt runs)"
 
 echo "=== unit tests (only those that exist) ==="
+# No standalone denticity-cap unit test exists; the <=4 cap (prompts 05-07) is exercised
+# live by the design sbatches via accounting.json / rejection_summary.json, not pytest.
 TESTS=""
-for t in test_charge_aware_validity.py test_denticity_cap.py test_projection.py test_repaint_smoke.py; do
+for t in test_charge_aware_validity.py test_projection.py test_repaint_smoke.py; do
     [ -f "$t" ] && TESTS="$TESTS $t"
 done
 echo "running:$TESTS"

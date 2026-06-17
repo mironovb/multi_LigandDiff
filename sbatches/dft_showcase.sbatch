@@ -11,8 +11,9 @@
 
 # Track A, run 2/2 (prompt 25): DFT-validated completion showcase LAUNCHER.
 # DFT is too heavy to batch -- one PBE0-D4/def2-TZVP opt of a CN=10 Eu complex does not
-# share a 4 h wall. So this is a light job that (1) prepares ORCA inputs for the top-N
-# xTB-stable mask-1 completions, then (2) submits ONE dft_orca.sbatch per structure
+# share a 4 h wall. So this is a light job that (1) prepares ORCA inputs for the most
+# xTB-stable mask-1 completions (up to --max-per-category per stability category), then
+# (2) submits ONE dft_orca.sbatch per structure
 # (each resumable via ORCA AutoStart). Parse afterwards with dft_pipeline.py parse.
 #
 # HONESTY GATE (experiment log): DFT has never run; only the template exists. Do not
@@ -34,13 +35,13 @@ if [ ! -d "$XTB_DIR" ]; then
     echo "ERROR: $XTB_DIR not found -- run the xTB stage (sbatches/xtb_batch.sbatch) first."; exit 1
 fi
 
-# 1) prepare top-N inputs (neutral complex, Eu3+ 4f6 -> mult 7)
+# 1) prepare inputs (up to --max-per-category per category; neutral complex, Eu3+ 4f6 -> mult 7)
 python -u dft_pipeline.py prepare \
     --xtb-results-dir "$XTB_DIR" \
     --reference eu_tmma_cis.xyz \
     --output-dir dft_work \
     --mult 7 \
-    --top-n 5
+    --max-per-category 2
 
 # 2) submit one ORCA job per prepared structure
 echo "=== submitting per-structure ORCA jobs ==="

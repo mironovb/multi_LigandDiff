@@ -47,6 +47,11 @@ sbatch sbatches/smoke_fixes.sbatch
 sbatch sbatches/design_maskall_fixed.sbatch  # the de-novo re-test
 sbatch sbatches/design_mask2.sbatch          # finishes the degradation curve
 
+# Curriculum re-finetune (Track B, heavy/optional) — CPU re-prep FIRST, then submit:
+#   python -u prepare_training_data.py --cif_dir <cifs> --output_dir data_curriculum \
+#       --mask_curriculum quadratic --force_all_masked --max_augment 30 --workers 16
+sbatch sbatches/finetune_curriculum.sbatch   # retrain on the high-mask curriculum (prompt 18)
+
 # DFT showcase (after the xTB stage): launcher prepares + submits one ORCA job per structure
 sbatch sbatches/dft_showcase.sbatch
 ```
