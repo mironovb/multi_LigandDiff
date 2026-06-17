@@ -203,7 +203,9 @@ def build_data_objects(metal_elem, metal_pos, target_cn, n_samples,
             )
             data_list.append(data)
 
-    return data_list
+    # Return the eligible LD_g partition pool alongside the data so the caller can
+    # report an honest denominator (attempts_eligible vs. the uncapped attempts_raw).
+    return data_list, ld_options
 
 
 # Reuse generate_ligand from generate_mask1.py (identical logic)
@@ -295,7 +297,7 @@ def main():
     print(f"Bare metal: {metal_elem} at {metal_pos}")
     print(f"Target CN: {args.target_cn}")
 
-    data = build_data_objects(
+    data, ld_options = build_data_objects(
         metal_elem, metal_pos, args.target_cn, args.n_samples,
         args.ligand_sizes, device, args.max_denticity,
         args.denticity_prior, rng)
@@ -305,6 +307,65 @@ def main():
     generate_ligand(data, args.model, device, batch_size, args.outdir,
                     args.resample_r, args.project_enabled,
                     args.d_min_start, args.d_min_end)
+
+    # --- Honest denominator accounting (bookkeeping only; does NOT change what is
+    # generated). attempts_eligible is ground truth (len(data)): under 'uniform' it
+    # is n_samples x len(eligible partitions); under 'csd' reform sampling makes it
+    # n_samples (one partition per seed). attempts_raw counts seeds x ALL (uncapped)
+    # integer partitions of the target CN -- the inflated denominator that includes
+    # chemically impossible chelates / over-long partitions never actually attempted.
+    raw_parts = const.denticity_partitions(args.target_cn, max_denticity=args.target_cn)
+    n_raw_parts = len(raw_parts)
+    n_eligible_parts = len(ld_options)
+    attempts_raw = args.n_samples * n_raw_parts
+    attempts_eligible = len(data)
+    noh_dir = os.path.join(args.outdir, 'noH')
+    valid = (len([f for f in os.listdir(noh_dir) if f.endswith('.xyz')])
+             if os.path.isdir(noh_dir) else 0)
+    yield_pct = 100.0 * valid / attempts_eligible if attempts_eligible else 0.0
+
+    note_parts = []
+    excluded = n_raw_parts - n_eligible_parts
+    if excluded > 0:
+        if args.target_cn == 9:
+            reason = (f"curated to {n_eligible_parts} SELECTED_LD9 partitions "
+                      f"(denticity<=4, <=5 ligands)")
+        else:
+            reason = f"denticity>{args.max_denticity} or >5 ligands"
+        note_parts.append(
+            f"{excluded}/{n_raw_parts} CN={args.target_cn} partitions excluded ({reason})")
+    if args.denticity_prior == 'csd' and n_eligible_parts > 0:
+        note_parts.append(
+            f"denticity_prior=csd: {args.n_samples} partition(s) sampled "
+            f"(not all {n_eligible_parts} eligible enumerated)")
+    note = '; '.join(note_parts) if note_parts else 'no partitions excluded (raw == eligible)'
+
+    print(f'bare target_cn={args.target_cn}  '
+          f'attempts={attempts_eligible} (raw {attempts_raw})  valid={valid}  '
+          f'yield={yield_pct:.2f}%')
+    if attempts_raw != attempts_eligible:
+        print(f'  note: {note}')
+
+    os.makedirs(args.outdir, exist_ok=True)
+    accounting = {
+        'mode': 'bare',
+        'complex': args.complex,
+        'target_cn': args.target_cn,
+        'n_seeds': args.n_samples,
+        'max_denticity': args.max_denticity,
+        'denticity_prior': args.denticity_prior,
+        'attempts_raw': attempts_raw,
+        'attempts_eligible': attempts_eligible,
+        'valid': valid,
+        'yield_pct': round(yield_pct, 4),
+        'note': note,
+        'n_partitions_raw': n_raw_parts,
+        'n_partitions_eligible': n_eligible_parts,
+        'partitions_eligible': [list(p) for p in ld_options],
+    }
+    with open(os.path.join(args.outdir, 'accounting.json'), 'w') as fh:
+        json.dump(accounting, fh, indent=2)
+
     print("Done!")
 
 

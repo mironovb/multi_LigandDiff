@@ -33,6 +33,7 @@ Eu(TMMA)2(NO3)3); see RESEARCH_PLAN.md.
 """
 
 import argparse
+import json
 import os
 from itertools import combinations
 
@@ -165,6 +166,48 @@ def count_valid(outdir):
     return len([f for f in os.listdir(noh) if f.endswith('.xyz')])
 
 
+def _partition_accounting(remaining_cn, max_denticity):
+    """Raw vs. eligible LD_g partition counts for one remaining coordination number.
+
+    Returns ``(n_raw, n_eligible, eligible_partitions)``:
+
+    * ``n_raw`` -- every unrestricted integer partition of ``remaining_cn``. This is
+      the *uncapped* denominator the old reporting implicitly divided by: it counts
+      chelates of arbitrary denticity, i.e. chemically impossible targets.
+    * ``n_eligible`` -- partitions surviving the chelate cap (parts <= max_denticity),
+      i.e. exactly what ``reform_data`` enumerates per context copy.
+    * ``eligible_partitions`` -- that capped list.
+    """
+    if remaining_cn <= 0:
+        return 0, 0, []
+    raw = const.denticity_partitions(remaining_cn, max_denticity=remaining_cn)
+    eligible = const.denticity_partitions(remaining_cn, max_denticity=max_denticity)
+    return len(raw), len(eligible), eligible
+
+
+def _accounting_note(subsets, total_raw_parts, total_eligible_parts,
+                     max_denticity, denticity_prior, n_seeds):
+    """One-line human note explaining why the raw and eligible denominators differ."""
+    parts = []
+    excluded = total_raw_parts - total_eligible_parts
+    if excluded > 0:
+        if len(subsets) == 1:
+            s = subsets[0]
+            parts.append(
+                f"{s['n_partitions_raw'] - s['n_partitions_eligible']}/"
+                f"{s['n_partitions_raw']} CN={s['remaining_cn']} partitions excluded "
+                f"(denticity>{max_denticity})")
+        else:
+            parts.append(
+                f"{excluded}/{total_raw_parts} partitions excluded across "
+                f"{len(subsets)} masked subset(s) (denticity>{max_denticity})")
+    if denticity_prior == 'csd' and total_eligible_parts > 0:
+        parts.append(
+            f"denticity_prior=csd: {n_seeds} partition(s) sampled per subset "
+            f"(not all {total_eligible_parts} eligible enumerated)")
+    return '; '.join(parts) if parts else 'no partitions excluded (raw == eligible)'
+
+
 def run_mask_level(complex_path, model, outdir, mask_k, n_samples, batch_size,
                    ligand_size, resample_r, project_enabled, d_min_start,
                    d_min_end, add_Hs, max_denticity=const.MAX_DENTICITY,
@@ -175,25 +218,84 @@ def run_mask_level(complex_path, model, outdir, mask_k, n_samples, batch_size,
         # Make the legacy global-numpy ligand-size draws reproducible too.
         np.random.seed(seed)
     data_list, n_ligands = read_molecule_maskk(complex_path, mask_k)
+
+    # --- Honest denominator accounting (bookkeeping only; does NOT change what is
+    # generated). Each masked subset fixes a remaining coordination number whose
+    # integer partitions are the candidate LD_g targets. The reported yield must be
+    # valid / attempts_eligible, where:
+    #   attempts_raw      = seeds x ALL (uncapped) partitions -- the inflated 6,300;
+    #   attempts_eligible = seeds x capped (and, under csd, sampled) partitions.
+    # We replicate reform_data's per-context remaining-CN math here so the JSON below
+    # records both denominators and the per-subset partition breakdown.
+    subsets = []
+    total_raw_parts = 0
+    total_eligible_parts = 0
+    for si, d in enumerate(data_list):
+        target_cn = int(torch.sum(d.coord_site).item())
+        cn_c = int(torch.sum(d.coord_site[d.context == 1]).item())
+        remaining = target_cn - cn_c
+        n_raw, n_elig, elig_parts = _partition_accounting(remaining, max_denticity)
+        total_raw_parts += n_raw
+        total_eligible_parts += n_elig
+        subsets.append({
+            'subset_index': si,
+            'remaining_cn': remaining,
+            'n_partitions_raw': n_raw,
+            'n_partitions_eligible': n_elig,
+            'partitions_eligible': [list(p) for p in elig_parts],
+        })
+
     dataset = data_list * n_samples
     data = reform_data(dataset, device, ligand_size=ligand_size, max_denticity=max_denticity,
                        denticity_prior=denticity_prior, rng=rng)
-    attempts = len(data)
-    print(f'{attempts} sampling attempts will be generated for mask_k={mask_k}')
-    if attempts == 0:
-        print(f'design_test mask_k={mask_k}  attempts=0  valid=0  yield=0.00%')
-        return
-    bs = min(batch_size, attempts)
-    os.makedirs(outdir, exist_ok=True)
-    generate_ligand(data, model, device, bs, outdir=outdir, resample_r=resample_r,
-                    project_enabled=project_enabled, d_min_start=d_min_start,
-                    d_min_end=d_min_end)
-    valid = count_valid(outdir)
+
+    # attempts_eligible is ground truth (len(data)): under 'uniform' it equals
+    # n_samples x sum(eligible partitions); under 'csd' reform_data draws ONE
+    # partition per context copy, so it equals n_samples x len(subsets).
+    attempts_eligible = len(data)
+    attempts_raw = n_samples * total_raw_parts
     k = n_ligands if mask_k == 'all' else int(mask_k)
     context_ligs = n_ligands - k
-    yield_pct = 100.0 * valid / attempts if attempts else 0.0
+    note = _accounting_note(subsets, total_raw_parts, total_eligible_parts,
+                            max_denticity, denticity_prior, n_samples)
+
+    print(f'{attempts_eligible} sampling attempts (raw {attempts_raw}) will be '
+          f'generated for mask_k={mask_k}')
+    os.makedirs(outdir, exist_ok=True)
+    valid = 0
+    if attempts_eligible > 0:
+        bs = min(batch_size, attempts_eligible)
+        generate_ligand(data, model, device, bs, outdir=outdir, resample_r=resample_r,
+                        project_enabled=project_enabled, d_min_start=d_min_start,
+                        d_min_end=d_min_end)
+        valid = count_valid(outdir)
+    yield_pct = 100.0 * valid / attempts_eligible if attempts_eligible else 0.0
     print(f'design_test mask_k={mask_k}  context={context_ligs}/{n_ligands}  '
-          f'attempts={attempts}  valid={valid}  yield={yield_pct:.2f}%')
+          f'attempts={attempts_eligible} (raw {attempts_raw})  valid={valid}  '
+          f'yield={yield_pct:.2f}%')
+    if attempts_raw != attempts_eligible:
+        print(f'  note: {note}')
+
+    accounting = {
+        'tag': 'all' if str(mask_k) == 'all' else str(int(mask_k)),
+        'mask_k': str(mask_k),
+        'complex': complex_path,
+        'n_seeds': n_samples,
+        'n_subsets': len(subsets),
+        'n_ligands': n_ligands,
+        'context_ligs': context_ligs,
+        'max_denticity': max_denticity,
+        'denticity_prior': denticity_prior,
+        'attempts_raw': attempts_raw,
+        'attempts_eligible': attempts_eligible,
+        'valid': valid,
+        'yield_pct': round(yield_pct, 4),
+        'note': note,
+        'subsets': subsets,
+    }
+    with open(os.path.join(outdir, 'accounting.json'), 'w') as fh:
+        json.dump(accounting, fh, indent=2)
+
     if add_Hs and valid:
         add_H(complex_path, outdir)
 
