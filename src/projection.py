@@ -1,9 +1,20 @@
 """
 Hard geometric exclusion-shell projection for diffusion sampling.
 
-Projects generated atoms onto the surface of a minimum-distance shell
-around context atoms from different ligand groups, preventing inter-ligand
-bridging artefacts (O-O contacts at ~1.3 Å across ligand boundaries).
+Projects generated atoms out of a minimum-distance shell around atoms from
+*different ligand groups*, preventing inter-ligand bridging artefacts (O-O
+contacts at ~1.3 Å across ligand boundaries). Two kinds of obstacle are
+enforced:
+
+  * generated <-> context    — the context atom is fixed, so the generated
+    atom absorbs the whole correction;
+  * generated <-> generated  — both atoms move apart by half the deficit, so
+    the shell still acts in the bare-metal de-novo (maskall) regime where
+    every ligand is generated and the metal is the only context atom.
+
+The metal (an all-zero ``ligand_group`` row, group -1) is never an obstacle —
+donors are supposed to approach it — and atoms within one ligand group are
+left alone (their short contacts are real bonds).
 
 For the projection to actually prevent these artefacts its ``d_min`` must
 clear the bond-perception cutoffs (see ``BOND_PERCEPTION_CUTOFFS`` below):
@@ -70,7 +81,13 @@ def project_exclusion_shell(
     d_min: float,
     same_group_allowed: bool = True,
 ) -> torch.Tensor:
-    """Project generated atoms so they are at least d_min from cross-group context atoms.
+    """Project generated atoms ``d_min`` away from every cross-group atom.
+
+    Enforces two exclusion shells (see the module docstring):
+      * generated <-> context   — context is fixed; the generated atom moves;
+      * generated <-> generated — both move apart by half (so the shell still
+        acts when every ligand is generated and only the metal is context).
+    Same-group pairs (intra-ligand bonds) and the metal (group -1) are exempt.
 
     Args:
         pos: (N, 3) atom positions.
@@ -104,11 +121,17 @@ def project_exclusion_shell(
     gen_idx = gen.nonzero(as_tuple=True)[0]     # indices of generated atoms
     ctx_idx = ctx.nonzero(as_tuple=True)[0]     # indices of context atoms
 
-    if gen_idx.numel() == 0 or ctx_idx.numel() == 0:
+    # Only bail when there is nothing generated to move. We deliberately do
+    # NOT bail when there is no context: in the bare-metal de-novo (maskall)
+    # regime the metal is the only context atom and it is exempt, so the only
+    # obstacles are *other generated ligand atoms* — projection must still run.
+    if gen_idx.numel() == 0:
         return pos
 
     # Group id per atom (argmax of one-hot). Metal / unassigned atoms have
-    # all-zero rows; mark them with -1 so they never match any real group.
+    # all-zero rows; mark them with -1 so they never match any real group and
+    # are never treated as obstacles (donors should be free to approach the
+    # metal; atoms within one group keep their real bonds).
     group_sum = ligand_group.sum(dim=-1)        # (N,)
     group_id = ligand_group.argmax(dim=-1)      # (N,)
     group_id[group_sum == 0] = -1               # metal / unassigned
@@ -119,42 +142,87 @@ def project_exclusion_shell(
     gen_groups = group_id[gen_idx]              # (G,)
     ctx_groups = group_id[ctx_idx]              # (C,)
 
-    # Mask: which (gen, ctx) pairs should be checked?
-    # Skip same-group pairs and skip metal context atoms (group_id == -1).
-    if same_group_allowed:
-        same_group = gen_groups.unsqueeze(1) == ctx_groups.unsqueeze(0)  # (G, C)
-    else:
-        same_group = torch.zeros(gen_idx.size(0), ctx_idx.size(0),
-                                 dtype=torch.bool, device=pos.device)
-    metal_ctx = (ctx_groups == -1).unsqueeze(0).expand_as(same_group)  # (G, C)
-    skip = same_group | metal_ctx               # don't project these pairs
-
+    G = gen_idx.size(0)
     eps = 1e-8
     max_iters = 20  # converges in 2-3 for typical geometries
 
-    for _ in range(max_iters):
-        gen_pos = pos_out[gen_idx]              # (G, 3)
-        diff = gen_pos.unsqueeze(1) - ctx_pos.unsqueeze(0)  # (G, C, 3)
-        dist = diff.norm(dim=-1)                # (G, C)
-        violates = (dist < d_min) & ~skip       # (G, C)
+    # --- generated <-> context obstacle mask (fixed obstacles) -------------
+    # Skip same-group pairs (intra-ligand bonds) and the metal (group -1).
+    has_ctx = ctx_idx.numel() > 0
+    if has_ctx:
+        if same_group_allowed:
+            gc_same = gen_groups.unsqueeze(1) == ctx_groups.unsqueeze(0)    # (G, C)
+        else:
+            gc_same = torch.zeros(G, ctx_idx.size(0), dtype=torch.bool,
+                                  device=pos.device)
+        gc_metal = (ctx_groups == -1).unsqueeze(0).expand_as(gc_same)      # (G, C)
+        gc_skip = gc_same | gc_metal            # don't project these pairs
 
-        if not violates.any():
+    # --- generated <-> generated obstacle mask (movable obstacles) ---------
+    # Same exemptions, but both atoms are generated so BOTH get pushed (below).
+    # Skip self, same-group pairs, and any (defensive) metal-row generated atom.
+    self_mask = torch.eye(G, dtype=torch.bool, device=pos.device)          # (G, G)
+    if same_group_allowed:
+        gg_same = gen_groups.unsqueeze(1) == gen_groups.unsqueeze(0)       # (G, G)
+    else:
+        gg_same = self_mask                     # only self counts as "same"
+    gg_metal = gen_groups == -1                                            # (G,)
+    gg_skip = gg_same | self_mask | gg_metal.unsqueeze(1) | gg_metal.unsqueeze(0)
+
+    for _ in range(max_iters):
+        gen_pos = pos_out[gen_idx]              # (G, 3) snapshot this iteration
+
+        # generated <-> generated violations (symmetric (G, G))
+        gdiff = gen_pos.unsqueeze(1) - gen_pos.unsqueeze(0)  # (G, G, 3): i - j
+        gdist = gdiff.norm(dim=-1)              # (G, G)
+        gg_violates = (gdist < d_min) & ~gg_skip
+
+        # generated <-> context violations (rectangular (G, C))
+        if has_ctx:
+            diff = gen_pos.unsqueeze(1) - ctx_pos.unsqueeze(0)  # (G, C, 3)
+            dist = diff.norm(dim=-1)            # (G, C)
+            gc_violates = (dist < d_min) & ~gc_skip
+        else:
+            gc_violates = None
+
+        if not gg_violates.any() and (gc_violates is None or not gc_violates.any()):
             break
 
-        # Apply projections atom-by-atom
-        for gi in range(gen_idx.size(0)):
-            viol_j = violates[gi].nonzero(as_tuple=True)[0]
-            if viol_j.numel() == 0:
-                continue
-            cur_pos = pos_out[gen_idx[gi]]
-            for cj in viol_j:
-                c_pos = ctx_pos[cj]
-                delta = cur_pos - c_pos
-                d = delta.norm() + eps
-                if d < d_min:
-                    direction = delta / d
-                    cur_pos = c_pos + direction * d_min
-            pos_out[gen_idx[gi]] = cur_pos
+        # --- Phase A: generated <-> generated, symmetric split push --------
+        # Both atoms in a violating cross-group pair share the correction, each
+        # moving apart by half the deficit. Accumulate every pair's push per
+        # atom and apply the MEAN: an atom squeezed by several neighbours moves
+        # along the average direction. This is order-independent (no atom is
+        # privileged by loop order) and stable under the outer iteration.
+        if gg_violates.any():
+            u = gdiff / (gdist.unsqueeze(-1) + eps)         # (G, G, 3): j -> i
+            half = 0.5 * (d_min - gdist).clamp(min=0.0)     # (G, G)
+            contrib = half.unsqueeze(-1) * u                # (G, G, 3)
+            contrib = contrib * gg_violates.unsqueeze(-1)   # zero non-violating
+            n_obst = gg_violates.sum(dim=1)                 # (G,) obstacles per atom
+            mean_corr = contrib.sum(dim=1) / n_obst.clamp(min=1).unsqueeze(-1)
+            pos_out[gen_idx] = gen_pos + mean_corr
+
+        # --- Phase B: generated <-> context, fixed obstacles ---------------
+        # Context never moves, so the generated atom absorbs the full
+        # correction. Project sequentially against each violating context atom
+        # (the running update lets an atom tunnel past a line of obstacles).
+        # Re-read pos_out so any Phase A shift is included; the inner
+        # ``d < d_min`` guard ignores contacts Phase A already resolved.
+        if gc_violates is not None and gc_violates.any():
+            for gi in range(G):
+                viol_j = gc_violates[gi].nonzero(as_tuple=True)[0]
+                if viol_j.numel() == 0:
+                    continue
+                cur_pos = pos_out[gen_idx[gi]]
+                for cj in viol_j:
+                    c_pos = ctx_pos[cj]
+                    delta = cur_pos - c_pos
+                    d = delta.norm() + eps
+                    if d < d_min:
+                        direction = delta / d
+                        cur_pos = c_pos + direction * d_min
+                pos_out[gen_idx[gi]] = cur_pos
 
     return pos_out
 

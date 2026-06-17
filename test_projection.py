@@ -181,12 +181,69 @@ def test_no_op_when_disabled():
     return passed
 
 
+def test_maskall_gen_gen_projection():
+    """Test 5: bare-metal de-novo (maskall) — generated cross-group atoms repel.
+
+    In the maskall regime the metal is the ONLY context atom, and it is exempt
+    (donors should approach it), so there are no generated<->context obstacles
+    whatsoever. The exclusion shell must still separate generated atoms in
+    *different* ligand groups, or two de-novo ligands fuse across their
+    boundary. Before this fix the projection was a no-op here: it only acted on
+    gen<->context pairs and skipped the metal, leaving zero eligible pairs.
+    """
+    print("\n" + "=" * 60)
+    print("TEST 5: maskall generated<->generated cross-group projection")
+    print("=" * 60)
+
+    d_min = 1.9
+    MAX_LIGANDS = 11
+
+    # 1 metal (context; all-zero group row => group -1) + 2 generated atoms in
+    # DIFFERENT ligand groups placed 1.0 A apart (an incipient cross-ligand
+    # fusion). The metal must stay put; the two generated atoms must separate.
+    pos = torch.tensor([
+        [0.0, 0.0, 0.0],   # metal (context)
+        [1.0, 0.0, 0.0],   # generated, group 0
+        [1.0, 1.0, 0.0],   # generated, group 1  (1.0 A from the atom above)
+    ])
+    ligand_group = torch.zeros(3, MAX_LIGANDS)
+    # metal row left all-zero -> group -1
+    ligand_group[1, 0] = 1.0
+    ligand_group[2, 1] = 1.0
+    context_mask = torch.tensor([[1.0], [0.0], [0.0]])  # only the metal is context
+
+    d_before = (pos[1] - pos[2]).norm().item()
+    pos_proj = project_exclusion_shell(pos, ligand_group, context_mask, d_min)
+    d_after = (pos_proj[1] - pos_proj[2]).norm().item()
+
+    metal_unchanged = torch.allclose(pos[0], pos_proj[0])
+    # Symmetric split: BOTH generated atoms should have moved, not just one.
+    moved_both = (not torch.allclose(pos[1], pos_proj[1]) and
+                  not torch.allclose(pos[2], pos_proj[2]))
+
+    print(f"  gen-gen distance: {d_before:.3f} A -> {d_after:.3f} A (d_min={d_min})")
+    print(f"  metal unchanged: {metal_unchanged}; both generated atoms moved: {moved_both}")
+
+    # Hard assertions so pytest catches any regression to the old no-op.
+    assert d_after >= d_min - 1e-3, (
+        f"generated cross-group atoms must reach d_min in the bare-metal "
+        f"de-novo case (got {d_after:.3f} A < {d_min} A)"
+    )
+    assert metal_unchanged, "metal (context) must never be moved by the projection"
+    assert moved_both, "both generated atoms should share the split correction"
+
+    passed = (d_after >= d_min - 1e-3) and metal_unchanged and moved_both
+    print(f"\n{'PASSED' if passed else 'FAILED'}: maskall gen-gen projection test")
+    return passed
+
+
 if __name__ == "__main__":
     results = []
     results.append(test_synthetic_projection())
     results.append(test_metal_not_projected())
     results.append(test_d_min_schedule())
     results.append(test_no_op_when_disabled())
+    results.append(test_maskall_gen_gen_projection())
 
     print("\n" + "=" * 60)
     print(f"SUMMARY: {sum(results)}/{len(results)} unit tests passed")
