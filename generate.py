@@ -50,6 +50,16 @@ parser.add_argument('--seed', type=int, default=None,
                     help='Seed for the partition-sampling RNG (and the global numpy RNG used '
                          'for ligand sizes) for reproducible runs. Default None = '
                          'nondeterministic (existing behaviour).')
+parser.add_argument('--donor_spec', type=str, default=None,
+                    help="Optional: fix the ELEMENT of each donor atom (the coord_site==1 atoms "
+                         "that touch the metal) instead of letting the diffusion invent them. "
+                         "Per-ligand form 'O,O;N,O,O,O' => ligand 1 binds via 2 O, ligand 2 via "
+                         "N+3 O (a nitrate); ';' separates generated ligands, ',' their donors. "
+                         "Whole-complex form 'N,N,O,O,O' lists every donor in slot order without "
+                         "pinning the per-ligand split. Elements must be keys of const.ATOM2IDX. "
+                         "When set, only denticity partitions the spec can fill are generated "
+                         "(the csd prior is bypassed); geometry and all non-donor atoms are still "
+                         "diffused. Omit for the default all-zeros de-novo behaviour.")
 
 
 atom2idx=const.ATOM2IDX
@@ -179,11 +189,76 @@ def get_ligand_size(ligand_size='random',startnum=1,endnum=10):
     return ligand_size
 
 
+def parse_donor_spec(spec_str):
+    """Parse the --donor_spec string into a structured, validated form.
+
+    Two accepted forms:
+      per-ligand    'O,O;N,O,O,O'  -> ';' separates generated ligands, ',' the donors of one
+                                      ligand. Here: ligand 1 binds via 2 O, ligand 2 via N + 3 O
+                                      (a nitrate). Pins the per-ligand denticity structure.
+      whole-complex 'N,N,O,O,O'    -> a flat donor list assigned to the metal-touching slots in
+                                      build order, without pinning how they split across ligands.
+
+    Returns {'mode': 'per_ligand'|'flat', 'groups': [[el,...],...], 'flat': [el,...]}.
+    Raises ValueError on an empty spec/slot or an element outside const.ATOM2IDX.
+    """
+    spec_str = spec_str.strip()
+    if not spec_str:
+        raise ValueError("--donor_spec is empty")
+    per_ligand = ';' in spec_str
+    raw_groups = spec_str.split(';') if per_ligand else [spec_str]
+    groups = []
+    for raw in raw_groups:
+        tokens = [t.strip() for t in raw.split(',')]
+        if any(t == '' for t in tokens):
+            raise ValueError(
+                f"--donor_spec '{spec_str}' has an empty donor slot (stray/duplicate ',' or ';'?)")
+        for t in tokens:
+            if t not in const.ATOM2IDX:
+                raise ValueError(
+                    f"--donor_spec element '{t}' is not a supported donor atom; "
+                    f"choose from {sorted(const.ATOM2IDX)}")
+        groups.append(tokens)
+    return {
+        'mode': 'per_ligand' if per_ligand else 'flat',
+        'groups': groups,
+        'flat': [el for g in groups for el in g],
+    }
+
+
+def donor_elements_for_partition(donor_spec, LD_g):
+    """Donor element for every donor slot of partition ``LD_g``, in build order, or None.
+
+    Build order follows reform_data's layout: ligand 0's donors, then ligand 1's donors, ...
+    (each ligand contributes its first ``LD_g[k]`` atoms as donors). Returns None when the spec
+    cannot fill this partition, so the caller skips that partition.
+
+    - flat mode: matches any partition whose donor count equals len(flat); donors fill in order.
+    - per_ligand mode: matches iff the multiset of ligand denticities equals the multiset of
+      group sizes, then each ligand slot is filled from a spec group of the same denticity.
+    """
+    if donor_spec['mode'] == 'flat':
+        flat = donor_spec['flat']
+        return list(flat) if len(flat) == sum(LD_g) else None
+    remaining_groups = [list(g) for g in donor_spec['groups']]
+    if sorted(len(g) for g in remaining_groups) != sorted(LD_g):
+        return None
+    elements = []
+    for d in LD_g:
+        match_idx = next((gi for gi, g in enumerate(remaining_groups) if len(g) == d), None)
+        if match_idx is None:
+            return None
+        elements.extend(remaining_groups.pop(match_idx))
+    return elements
+
+
 def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENTICITY,
-                denticity_prior='uniform',rng=None):
+                denticity_prior='uniform',rng=None,donor_spec=None):
     if rng is None:
         rng = np.random.default_rng()
     new_data=[]
+    spec_matched = False
+    remaining_seen = set()
     for i in dataset:
         #context
         x=i['pos'][i['context']==1]
@@ -209,8 +284,12 @@ def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENT
         remaining = target_cn - cn_c
         if remaining <= 0:
             continue
+        remaining_seen.add(remaining)
         ld_options = const.denticity_partitions(remaining, max_denticity=max_denticity)
-        if denticity_prior == 'csd' and ld_options:
+        # A donor spec is authoritative: keep the full (capped) enumeration and filter it to
+        # spec-matching partitions in the loop below, so the CSD prior sampling is bypassed (it
+        # would otherwise throw away most of the partitions the spec is allowed to fill).
+        if denticity_prior == 'csd' and ld_options and donor_spec is None:
             # Sample ONE partition for this context copy proportional to the CSD
             # prior. The dataset already holds n_samples copies of each context, so
             # this draws n_samples partitions ~ prior per context (vs. enumerating
@@ -220,6 +299,13 @@ def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENT
             probs = (weights / total) if total > 0 else None
             ld_options = [ld_options[rng.choice(len(ld_options), p=probs)]]
         for LD_g in ld_options:
+            donor_elements = None
+            if donor_spec is not None:
+                donor_elements = donor_elements_for_partition(donor_spec, LD_g)
+                if donor_elements is None:
+                    # This partition's denticity structure can't host the requested donor set.
+                    continue
+                spec_matched = True
             ligand_index=index[:len(LD_g)]
             gen_ligand_groups=[]
             gen_ligand_coord_sites=[]
@@ -247,6 +333,15 @@ def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENT
             gen_ligand_x=torch.zeros(gen_ligand_size,3)
             gen_ligand_coord_site=torch.cat(gen_ligand_coord_sites,dim=0)
             gen_ligand_onehot=torch.zeros(gen_ligand_size,num_atom_types)
+            if donor_elements is not None:
+                # Seed the ELEMENT of each donor atom (the coord_site==1 rows that touch the
+                # metal); the diffusion still fills every other row and all coordinates.
+                donor_slots = (gen_ligand_coord_site == 1).nonzero(as_tuple=True)[0].tolist()
+                assert len(donor_slots) == len(donor_elements), (
+                    f"donor_spec slot mismatch: {len(donor_slots)} donor sites vs "
+                    f"{len(donor_elements)} specified for partition {LD_g}")
+                for slot, element in zip(donor_slots, donor_elements):
+                    gen_ligand_onehot[slot, const.ATOM2IDX[element]] = 1
             new_x=torch.cat([x,gen_ligand_x],dim=0)
             new_context=torch.cat([torch.ones(x.shape[0]),torch.zeros(gen_ligand_size)],dim=0)
             new_ligand_diff=torch.cat([torch.zeros(x.shape[0]),torch.ones(gen_ligand_size)],dim=0)
@@ -260,6 +355,15 @@ def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENT
             data = Data(pos=new_x.to(device),label=f"{i['label']}_{LD_c}_{LD_g}",coord_site=new_coord_site.to(device),nuclear_charges=new_nuclear_charges.to(device), context=new_context.to(device), ligand_diff=new_ligand_diff.to(device), ligand_group=new_ligand_group.to(device), one_hot=new_onehot.to(device), num_atoms=natoms)
             new_data.append(data)
     #new_data=[item for item in new_data for _ in range(2)]
+    if donor_spec is not None and not spec_matched:
+        wanted = ([len(g) for g in donor_spec['groups']]
+                  if donor_spec['mode'] == 'per_ligand'
+                  else f"{len(donor_spec['flat'])} donor(s) (any partition)")
+        raise ValueError(
+            f"--donor_spec could not be matched to any maskable context in this complex. "
+            f"Spec needs {wanted}; contexts (re)generate one of these donor counts: "
+            f"{sorted(remaining_seen)} (capped at --max_denticity={max_denticity}). "
+            f"Adjust the donor count / per-ligand denticities, --max_denticity, or the complex.")
     return new_data
 
 def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes',resample_r=1,
@@ -447,7 +551,7 @@ def add_H(org_xyz,gen_dir):
 
 def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add_Hs=False,resample_r=1,
          project_enabled=False,d_min_start=1.5,d_min_end=1.3,max_denticity=const.MAX_DENTICITY,
-         denticity_prior='uniform',seed=None):
+         denticity_prior='uniform',seed=None,donor_spec=None):
     """
     Generate multiple new structures for each variation in a given complex
     Args:
@@ -459,16 +563,32 @@ def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add
         denticity_prior: 'uniform' (all capped partitions) or 'csd' (sample
             n_samples partitions ~ const.DENTICITY_PRIOR per context)
         seed: optional int seed for reproducible sampling (None = nondeterministic)
+        donor_spec: optional donor-atom identity spec (e.g. 'O,O;N,O,O,O' or 'N,N,O,O,O');
+            seeds the element of each metal-touching donor atom. None = today's all-zeros
+            de-novo behaviour. See parse_donor_spec / --donor_spec for the grammar.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     rng = np.random.default_rng(seed)
     if seed is not None:
         # Make the legacy global-numpy ligand-size draws reproducible too.
         np.random.seed(seed)
+    parsed_donor_spec = parse_donor_spec(donor_spec) if donor_spec else None
+    if parsed_donor_spec is not None:
+        if parsed_donor_spec['mode'] == 'per_ligand':
+            max_grp = max(len(g) for g in parsed_donor_spec['groups'])
+            if max_grp > max_denticity:
+                raise ValueError(
+                    f"--donor_spec requests a {max_grp}-dentate ligand but "
+                    f"--max_denticity={max_denticity}. Raise --max_denticity to >= {max_grp}.")
+        if denticity_prior == 'csd':
+            print("[donor_spec] --denticity_prior csd is bypassed when --donor_spec is set; "
+                  "generating exactly the spec-matching partition(s).")
+        print(f"[donor_spec] conditioning donor identities ({parsed_donor_spec['mode']}): "
+              f"{parsed_donor_spec['groups']}")
     dataset=read_molecule(complex)*n_samples
     print(f'{len(dataset)} samples will be generated')
     data=reform_data(dataset,device,ligand_size=ligand_size,max_denticity=max_denticity,
-                     denticity_prior=denticity_prior,rng=rng)
+                     denticity_prior=denticity_prior,rng=rng,donor_spec=parsed_donor_spec)
     batch_size=min(batch_size,len(data))
     generate_ligand(data,model,device,batch_size,outdir=outdir,resample_r=resample_r,
                     project_enabled=project_enabled,d_min_start=d_min_start,d_min_end=d_min_end)
@@ -481,7 +601,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     main(args.outdir,args.model,args.complex,args.batch_size,args.n_samples,args.ligand_sizes,args.add_Hs,args.resample_r,
          args.project_enabled,args.d_min_start,args.d_min_end,args.max_denticity,
-         args.denticity_prior,args.seed)
+         args.denticity_prior,args.seed,args.donor_spec)
 
     
 
