@@ -12,6 +12,10 @@ MAX_LIGANDS = 10
 # complexes are dominated by mono/bi/tri-dentate; >4 partitions are over-generation.
 MAX_DENTICITY = 4
 
+# CSD-observed first-shell denticity frequencies (normalised over 1..MAX_DENTICITY),
+# from the curated lanthanide dataset ligand inventory.
+DENTICITY_PRIOR = {1: 0.677, 2: 0.180, 3: 0.140, 4: 0.003}
+
 
 # Atom idx for one-hot encoding
 ATOM2IDX = {'C': 0, 'N': 1, 'O': 2, 'S': 3, 'Br': 4, 'Cl': 5, 'P': 6, 'F': 7}
@@ -246,5 +250,20 @@ def denticity_partitions(remaining_cn, max_denticity=MAX_DENTICITY):
                 yield [part] + rest
 
     return list(_partitions(remaining_cn, min(max_denticity, remaining_cn)))
+
+
+def denticity_prior_weight(partition):
+    """Unnormalised CSD-prior score of a denticity partition.
+
+    Equals the product of the per-part frequencies in DENTICITY_PRIOR, so
+    mono/bidentate-heavy partitions score highest. Parts outside the tabulated
+    range (1..MAX_DENTICITY) contribute 0, i.e. a partition containing one is
+    treated as unobserved. Used by the optional ``--denticity_prior csd``
+    sampling in the generate scripts to concentrate attempts on realistic targets.
+    """
+    weight = 1.0
+    for part in partition:
+        weight *= DENTICITY_PRIOR.get(part, 0.0)
+    return weight
 
 

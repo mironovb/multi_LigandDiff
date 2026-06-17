@@ -40,6 +40,16 @@ parser.add_argument('--d_min_end', type=float, default=1.3,
 parser.add_argument('--max_denticity', type=int, default=const.MAX_DENTICITY,
                     help='Chelate cap: max donors one generated ligand binds through '
                          '(caps the denticity partitions handed to the model)')
+parser.add_argument('--denticity_prior', choices=['uniform', 'csd'], default='uniform',
+                    help="How to choose denticity partitions per masked context. "
+                         "'uniform' (default) enumerates every capped partition; 'csd' "
+                         "samples n_samples partitions per context proportional to the "
+                         "CSD-observed denticity prior (const.DENTICITY_PRIOR), concentrating "
+                         "attempts on realistic mono/bidentate-heavy targets.")
+parser.add_argument('--seed', type=int, default=None,
+                    help='Seed for the partition-sampling RNG (and the global numpy RNG used '
+                         'for ligand sizes) for reproducible runs. Default None = '
+                         'nondeterministic (existing behaviour).')
 
 
 atom2idx=const.ATOM2IDX
@@ -169,7 +179,10 @@ def get_ligand_size(ligand_size='random',startnum=1,endnum=10):
     return ligand_size
 
 
-def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENTICITY):
+def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENTICITY,
+                denticity_prior='uniform',rng=None):
+    if rng is None:
+        rng = np.random.default_rng()
     new_data=[]
     for i in dataset:
         #context
@@ -197,6 +210,15 @@ def reform_data(dataset,device,ligand_size='random',max_denticity=const.MAX_DENT
         if remaining <= 0:
             continue
         ld_options = const.denticity_partitions(remaining, max_denticity=max_denticity)
+        if denticity_prior == 'csd' and ld_options:
+            # Sample ONE partition for this context copy proportional to the CSD
+            # prior. The dataset already holds n_samples copies of each context, so
+            # this draws n_samples partitions ~ prior per context (vs. enumerating
+            # all of them uniformly), concentrating attempts on realistic targets.
+            weights = np.array([const.denticity_prior_weight(p) for p in ld_options], dtype=float)
+            total = weights.sum()
+            probs = (weights / total) if total > 0 else None
+            ld_options = [ld_options[rng.choice(len(ld_options), p=probs)]]
         for LD_g in ld_options:
             ligand_index=index[:len(LD_g)]
             gen_ligand_groups=[]
@@ -417,7 +439,8 @@ def add_H(org_xyz,gen_dir):
 
 
 def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add_Hs=False,resample_r=1,
-         project_enabled=False,d_min_start=1.5,d_min_end=1.3,max_denticity=const.MAX_DENTICITY):
+         project_enabled=False,d_min_start=1.5,d_min_end=1.3,max_denticity=const.MAX_DENTICITY,
+         denticity_prior='uniform',seed=None):
     """
     Generate multiple new structures for each variation in a given complex
     Args:
@@ -426,11 +449,19 @@ def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add
         complex: path to the reference complex
         ligand_size: number of ligand atoms to generate, default is random
         add_Hs: add H atoms to the generated complexes
+        denticity_prior: 'uniform' (all capped partitions) or 'csd' (sample
+            n_samples partitions ~ const.DENTICITY_PRIOR per context)
+        seed: optional int seed for reproducible sampling (None = nondeterministic)
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    rng = np.random.default_rng(seed)
+    if seed is not None:
+        # Make the legacy global-numpy ligand-size draws reproducible too.
+        np.random.seed(seed)
     dataset=read_molecule(complex)*n_samples
     print(f'{len(dataset)} samples will be generated')
-    data=reform_data(dataset,device,ligand_size=ligand_size,max_denticity=max_denticity)
+    data=reform_data(dataset,device,ligand_size=ligand_size,max_denticity=max_denticity,
+                     denticity_prior=denticity_prior,rng=rng)
     batch_size=min(batch_size,len(data))
     generate_ligand(data,model,device,batch_size,outdir=outdir,resample_r=resample_r,
                     project_enabled=project_enabled,d_min_start=d_min_start,d_min_end=d_min_end)
@@ -442,7 +473,8 @@ def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add
 if __name__ == '__main__':
     args = parser.parse_args()
     main(args.outdir,args.model,args.complex,args.batch_size,args.n_samples,args.ligand_sizes,args.add_Hs,args.resample_r,
-         args.project_enabled,args.d_min_start,args.d_min_end,args.max_denticity)
+         args.project_enabled,args.d_min_start,args.d_min_end,args.max_denticity,
+         args.denticity_prior,args.seed)
 
     
 

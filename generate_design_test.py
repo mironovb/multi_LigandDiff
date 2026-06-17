@@ -36,6 +36,7 @@ import argparse
 import os
 from itertools import combinations
 
+import numpy as np
 import torch
 
 from src import const
@@ -166,11 +167,17 @@ def count_valid(outdir):
 
 def run_mask_level(complex_path, model, outdir, mask_k, n_samples, batch_size,
                    ligand_size, resample_r, project_enabled, d_min_start,
-                   d_min_end, add_Hs, max_denticity=const.MAX_DENTICITY):
+                   d_min_end, add_Hs, max_denticity=const.MAX_DENTICITY,
+                   denticity_prior='uniform', seed=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    rng = np.random.default_rng(seed)
+    if seed is not None:
+        # Make the legacy global-numpy ligand-size draws reproducible too.
+        np.random.seed(seed)
     data_list, n_ligands = read_molecule_maskk(complex_path, mask_k)
     dataset = data_list * n_samples
-    data = reform_data(dataset, device, ligand_size=ligand_size, max_denticity=max_denticity)
+    data = reform_data(dataset, device, ligand_size=ligand_size, max_denticity=max_denticity,
+                       denticity_prior=denticity_prior, rng=rng)
     attempts = len(data)
     print(f'{attempts} sampling attempts will be generated for mask_k={mask_k}')
     if attempts == 0:
@@ -212,6 +219,14 @@ def main():
     p.add_argument('--max_denticity', type=int, default=const.MAX_DENTICITY,
                    help='Chelate cap: max donors one generated ligand binds through '
                         '(caps the denticity partitions handed to the model)')
+    p.add_argument('--denticity_prior', choices=['uniform', 'csd'], default='uniform',
+                   help="How to choose denticity partitions per masked subset. "
+                        "'uniform' (default) enumerates every capped partition; 'csd' "
+                        "samples n_samples partitions proportional to const.DENTICITY_PRIOR "
+                        "to concentrate attempts on realistic mono/bidentate-heavy targets.")
+    p.add_argument('--seed', type=int, default=None,
+                   help='Seed for partition-sampling + global numpy RNG for reproducible '
+                        'runs. Default None = nondeterministic (existing behaviour).')
     args = p.parse_args()
 
     tag = 'all' if str(args.mask_k) == 'all' else str(int(args.mask_k))
@@ -219,7 +234,8 @@ def main():
     run_mask_level(args.complex, args.model, outdir, args.mask_k,
                    args.n_samples, args.batch_size, args.ligand_sizes,
                    args.resample_r, args.project_enabled, args.d_min_start,
-                   args.d_min_end, args.add_Hs, args.max_denticity)
+                   args.d_min_end, args.add_Hs, args.max_denticity,
+                   args.denticity_prior, args.seed)
     print('Done!')
 
 

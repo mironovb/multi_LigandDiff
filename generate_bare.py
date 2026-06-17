@@ -55,6 +55,14 @@ parser.add_argument('--d_min_end', type=float, default=1.3)
 parser.add_argument('--max_denticity', type=int, default=const.MAX_DENTICITY,
                     help='Chelate cap: max donors one generated ligand binds through '
                          '(caps the denticity partitions handed to the model)')
+parser.add_argument('--denticity_prior', choices=['uniform', 'csd'], default='uniform',
+                    help="How to choose LD_g partitions. 'uniform' (default) uses n_samples "
+                         "copies of every candidate partition; 'csd' draws n_samples partitions "
+                         "proportional to const.DENTICITY_PRIOR to concentrate attempts on "
+                         "realistic mono/bidentate-heavy targets.")
+parser.add_argument('--seed', type=int, default=None,
+                    help='Seed for partition-sampling + global numpy RNG for reproducible runs. '
+                         'Default None = nondeterministic (existing behaviour).')
 
 # Chemically reasonable LD_g partitions for CN=9 lanthanides.
 # Limited to <=5 ligands with denticities 1-4.
@@ -83,14 +91,22 @@ def read_bare_metal(filename):
 
 def build_data_objects(metal_elem, metal_pos, target_cn, n_samples,
                        ligand_size='random', device='cpu',
-                       max_denticity=const.MAX_DENTICITY):
+                       max_denticity=const.MAX_DENTICITY,
+                       denticity_prior='uniform', rng=None):
     """Create Data objects for total generation (CN_c=0).
 
     For each selected LD_g partition and each sample, creates one Data
     object with:
       - context: just the metal
       - generated: placeholder atoms sized per denticity
+
+    With ``denticity_prior='csd'`` the n_samples attempts are drawn across the
+    candidate partitions proportional to const.DENTICITY_PRIOR (instead of
+    n_samples copies of every partition), concentrating attempts on realistic
+    mono/bidentate-heavy targets. ``rng`` is a numpy Generator for reproducibility.
     """
+    if rng is None:
+        rng = np.random.default_rng()
     metal_charge = charges[metal_elem]
     metal_pos_t = torch.tensor([metal_pos], dtype=torch.float32)
     label_base = os.path.splitext(os.path.basename(args.complex))[0]
@@ -110,9 +126,24 @@ def build_data_objects(metal_elem, metal_pos, target_cn, n_samples,
     for ld in ld_options:
         print(f"  {ld}")
 
+    # Build the per-partition attempt plan as (partition, n_repeats) pairs.
+    if denticity_prior == 'csd' and ld_options:
+        # Draw n_samples partitions proportional to the CSD prior (instead of
+        # n_samples copies of every partition), concentrating attempts.
+        weights = np.array([const.denticity_prior_weight(p) for p in ld_options], dtype=float)
+        total = weights.sum()
+        probs = (weights / total) if total > 0 else None
+        draws = rng.choice(len(ld_options), size=n_samples, p=probs)
+        counts = Counter(int(d) for d in draws)
+        sampling_plan = [(ld_options[idx], cnt) for idx, cnt in counts.items()]
+        summary = {tuple(ld_options[idx]): cnt for idx, cnt in counts.items()}
+        print(f"denticity_prior=csd: drew {n_samples} partitions ~ CSD prior -> {summary}")
+    else:
+        sampling_plan = [(ld_g, n_samples) for ld_g in ld_options]
+
     data_list = []
-    for ld_g in ld_options:
-        for _ in range(n_samples):
+    for ld_g, n_rep in sampling_plan:
+        for _ in range(n_rep):
             # Context: just the metal
             ctx_pos = metal_pos_t.clone()                  # [1, 3]
             ctx_onehot = torch.zeros(1, num_atom_types)     # metal has zero one-hot
@@ -255,6 +286,10 @@ def main():
     global args
     args = parser.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    rng = np.random.default_rng(args.seed)
+    if args.seed is not None:
+        # Make the legacy global-numpy ligand-size draws reproducible too.
+        np.random.seed(args.seed)
 
     metal_elem, metal_pos = read_bare_metal(args.complex)
     print(f"Bare metal: {metal_elem} at {metal_pos}")
@@ -262,7 +297,8 @@ def main():
 
     data = build_data_objects(
         metal_elem, metal_pos, args.target_cn, args.n_samples,
-        args.ligand_sizes, device, args.max_denticity)
+        args.ligand_sizes, device, args.max_denticity,
+        args.denticity_prior, rng)
     print(f"{len(data)} total Data objects created")
 
     batch_size = min(args.batch_size, len(data))
