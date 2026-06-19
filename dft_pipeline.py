@@ -521,6 +521,8 @@ def cmd_parse(args):
     # Parse all results
     results = []
     ref_energy = None
+    ref_n_atoms = None            # reference atom count, for the ΔE formula-match guard
+    n_atoms_by_name = {}
 
     for m in manifest:
         name = m["name"]
@@ -532,6 +534,7 @@ def cmd_parse(args):
 
         # Parse final geometry for donor distances
         final_atoms = parse_orca_final_xyz(str(struct_dir))
+        n_atoms_by_name[name] = len(final_atoms) if final_atoms else None
         donors = eu_donor_distances(final_atoms) if final_atoms else []
         coord_donors = [d for d in donors if d["distance_A"] <= DISSOCIATION_CUTOFF]
         dissociated_donors = [d for d in donors if d["distance_A"] > DISSOCIATION_CUTOFF]
@@ -556,6 +559,7 @@ def cmd_parse(args):
 
         if category == "reference" and orca["final_energy_hartree"] is not None:
             ref_energy = orca["final_energy_hartree"]
+            ref_n_atoms = n_atoms_by_name.get(name)
 
         status = "OK" if orca["converged"] else (orca["error"] or "not converged")
         log.info("  %-25s  %-15s  E=%-15s  %s",
@@ -563,15 +567,23 @@ def cmd_parse(args):
                  f"{orca['final_energy_hartree']:.6f}" if orca["final_energy_hartree"] else "N/A",
                  status)
 
-    # Compute relative energies vs reference
+    # Compute relative energies vs reference -- ONLY between identical molecular
+    # formulae. The VEDTAA01 reference is heavy-atom-only (35 atoms, no H) while the
+    # completions are H-complete (43 atoms), so E - E_ref across them is physically
+    # meaningless; suppress ΔE (emit None) on any atom-count mismatch rather than
+    # reporting a bogus number (see reports/dft_showcase_result.md caveat).
     if ref_energy is not None:
         for rec in results:
-            if rec["dft_energy_hartree"] is not None:
+            n_at = n_atoms_by_name.get(rec["name"])
+            if rec["dft_energy_hartree"] is not None and n_at == ref_n_atoms:
                 delta = (rec["dft_energy_hartree"] - ref_energy) * HARTREE_TO_KCAL
                 rec["dft_deltaE_kcal_mol"] = round(delta, 2)
             else:
                 rec["dft_deltaE_kcal_mol"] = None
-        log.info("Reference energy: %.6f Ha", ref_energy)
+                if rec["dft_energy_hartree"] is not None and n_at != ref_n_atoms:
+                    log.warning("  %s: deltaE suppressed (formula mismatch vs reference: "
+                                "%s vs %s atoms)", rec["name"], n_at, ref_n_atoms)
+        log.info("Reference energy: %.6f Ha (%s atoms)", ref_energy, ref_n_atoms)
     else:
         log.warning("No reference energy — cannot compute relative energies.")
         for rec in results:
