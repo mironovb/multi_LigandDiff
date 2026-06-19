@@ -31,9 +31,9 @@ parser.add_argument('--resample_r', type=int, default=1,
                     help='RePaint resampling iterations per timestep (1=standard, 10=recommended)')
 parser.add_argument('--project_enabled', type=eval, default=False,
                     help='Enable hard exclusion-shell projection during sampling')
-parser.add_argument('--d_min_start', type=float, default=1.5,
+parser.add_argument('--d_min_start', type=float, default=2.2,
                     help='Exclusion shell d_min at high noise (start of reverse)')
-parser.add_argument('--d_min_end', type=float, default=1.3,
+parser.add_argument('--d_min_end', type=float, default=1.9,
                     help='Exclusion shell d_min at low noise (end of reverse)')
 
 
@@ -225,7 +225,7 @@ def reform_data(dataset,device,ligand_size='random'):
     return new_data
 
 def generate_ligand(data,model,device,batch_size=64,outdir='generated_complexes',resample_r=1,
-                    project_enabled=False,d_min_start=1.5,d_min_end=1.3):
+                    project_enabled=False,d_min_start=2.2,d_min_end=1.9):
     os.makedirs(f'{outdir}/noH', exist_ok=True)
     ddpm = DDPM.load_from_checkpoint(model, map_location=device).eval().to(device)
     dataloader = DataLoader(data, batch_size=batch_size, shuffle=False)
@@ -399,7 +399,7 @@ def add_H(org_xyz,gen_dir):
 
 
 def main(outdir,model,complex,batch_size=64,n_samples=1,ligand_size='random',add_Hs=False,resample_r=1,
-         project_enabled=False,d_min_start=1.5,d_min_end=1.3):
+         project_enabled=False,d_min_start=2.2,d_min_end=1.9):
     """
     Generate multiple new structures for each variation in a given complex
     Args:

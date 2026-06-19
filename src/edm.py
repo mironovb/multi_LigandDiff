@@ -125,7 +125,7 @@ class EDM(torch.nn.Module):
 
     @torch.no_grad()
     def sample_chain(self, x, h, context, ligand_diff, batch_seg,batch_size, ligand_site, keep_frames=None,timesteps=None, resample_r=1,
-                     project_enabled=False, ligand_group=None, d_min_start=1.5, d_min_end=1.3,
+                     project_enabled=False, ligand_group=None, d_min_start=2.2, d_min_end=1.9,
                      valence_guard=False):
         timesteps = self.T if timesteps is None else timesteps
         assert 0 < keep_frames <= timesteps

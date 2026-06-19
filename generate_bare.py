@@ -162,13 +162,19 @@ def build_data_objects(metal_elem, metal_pos, target_cn, n_samples,
             gen_groups = []
             gen_coord_sites = []
             for k, dent in enumerate(ld_g):
+                # Chemistry floor per denticity (mirror generate.py reform_data, commit
+                # 1c0ca09): a bidentate slot must fit at least a nitrate (N+3O=4). The old
+                # np.random.randint(dent,10) handed ~25% of bidentate slots only 2-3 atoms,
+                # too few to build the donor motif -- the exact too-few-atoms failure.
+                floor = const.DENTICITY_MIN_ATOMS.get(dent, dent)
                 if dent < 3:
-                    lig_size = np.random.randint(dent, 10)
+                    lig_size = floor + int(rng.integers(0, 6))
                 else:
                     if ligand_size == 'random':
                         lig_size = np.random.randint(10, 30)
                     else:
                         lig_size = int(ligand_size)
+                lig_size = max(lig_size, floor, dent)
                 assert lig_size >= dent
 
                 grp = torch.zeros(lig_size, const.MAX_LIGANDS)

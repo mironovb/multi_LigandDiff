@@ -127,7 +127,7 @@ if __name__ == '__main__':
     p.add_argument('--n_layers', type=int, default=6,   help='number of layers')
     p.add_argument('--attention', type=eval, default=True, help='use attention in the GVP')
    
-    p.add_argument('--normalization_factor', type=float, default=1,help="Normalize the sum aggregation ")
+    p.add_argument('--normalization_factor', type=float, default=100,help="Normalize the sum aggregation; 100 matches the pretrained backbone + architecture defaults (was 1, the warm-start-mismatch footgun fixed in finetune.py)")
     p.add_argument('--diffusion_steps', type=int, default=500)
     p.add_argument('--diffusion_noise_schedule', type=str, default='polynomial_2', help='learned, cosine')
     p.add_argument('--diffusion_noise_precision', type=float, default=1e-5, )
