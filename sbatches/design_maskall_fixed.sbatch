@@ -39,7 +39,14 @@ echo "Start: $(date)"
 echo "Host: $(hostname)"
 nvidia-smi
 
-CKPT=models/ln_finetuned/ln_finetuned_epoch=48.ckpt
+# !! CHECKPOINT CAVEAT (normalization_factor bug, prompts 19-20) -- read docs/H200_RUNBOOK.md.
+# epoch=48.ckpt stores normalization_factor=1: warm-started from a factor=100 backbone into a
+# factor=1 fine-tune, so the TM transfer was scrambled. It samples self-consistently, so THIS run
+# is valid and apples-to-apples with the old 0/6300 -- but the number is a BUG-TRAINED model's
+# capability, not the clean ceiling. For the clean de-novo number, first produce a factor=100
+# checkpoint (sbatches/finetune_curriculum.sbatch -- trains the bare-metal regime) and re-point CKPT.
+CKPT=models/ln_finetuned/ln_finetuned_epoch=48.ckpt   # bug-trained (factor=1); preliminary number
+# CKPT=models/ln_finetuned_curriculum/<best>.ckpt     # <- clean factor=100 + bare-metal curriculum (recommended)
 OUT=design_test_runs/maskall_fixed_${SLURM_JOB_ID}
 
 python -u generate_design_test.py \

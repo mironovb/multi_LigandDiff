@@ -34,7 +34,8 @@ once their prerequisite prompts have landed (each script's header lists them).
 | Post-fix smoke | `smoke_fixes.sbatch` | yes (short) | a few mask-1 completions — "did we break sampling?" |
 | De-novo re-test | `design_maskall_fixed.sbatch` | yes | maskall with all fixes on (vs. the old 0/6300) |
 | Mask-2 curve | `design_mask2.sbatch` | yes | dedicated mask-2 run to completion (Track A) |
-| Curriculum re-finetune | `finetune_curriculum.sbatch` | H200 | retrain on the high-mask curriculum (needs CPU re-prep first) |
+| Clean re-finetune (control) | `finetune_fixed.sbatch` | H200 | factor=100 re-finetune, legacy masking — clean checkpoint for the degradation curve (needs CPU re-prep first) |
+| Curriculum re-finetune | `finetune_curriculum.sbatch` | H200 | factor=100 + high-mask curriculum — bare-metal/de-novo checkpoint (needs CPU re-prep first) |
 | DFT showcase | `dft_showcase.sbatch` | ORCA | prepare + submit per-structure DFT on top mask-1 (Track A) |
 
 ```bash
@@ -46,6 +47,11 @@ sbatch sbatches/rescore_validity.sbatch      # the decisive Finding-2 experiment
 sbatch sbatches/smoke_fixes.sbatch
 sbatch sbatches/design_maskall_fixed.sbatch  # the de-novo re-test
 sbatch sbatches/design_mask2.sbatch          # finishes the degradation curve
+
+# Clean re-finetune (control, fixes normalization_factor=100; prompts 19-20) — CPU re-prep FIRST:
+#   python -u prepare_training_data.py --cif_dir <cifs> --output_dir data_fixed \
+#       --mask_curriculum uniform --no_force_all_masked --max_augment 30 --workers 16
+sbatch sbatches/finetune_fixed.sbatch        # clean factor=100 checkpoint for the degradation curve
 
 # Curriculum re-finetune (Track B, heavy/optional) — CPU re-prep FIRST, then submit:
 #   python -u prepare_training_data.py --cif_dir <cifs> --output_dir data_curriculum \
@@ -107,4 +113,11 @@ python dft_pipeline.py parse --work-dir dft_work --reference eu_tmma_cis.xyz \
   (this sank job 14289937). Use `source activate ligdiff`.
 - **`python -u`** everywhere for unbuffered, live logs.
 - **xTB/DFT** need no GPU; they request CPU cores (`-c 16`) on the same partition.
-- **Checkpoint:** all generation uses `models/ln_finetuned/ln_finetuned_epoch=48.ckpt`.
+- **Checkpoint:** all generation defaults to `models/ln_finetuned/ln_finetuned_epoch=48.ckpt`.
+  ⚠ This checkpoint stores `normalization_factor=1` — it was warm-started from the factor=100
+  pretrained backbone into a factor=1 fine-tune (the bug fixed for future runs in prompts 19-20).
+  It samples self-consistently, so the fixed-instrument design re-runs are valid and
+  apples-to-apples with the old numbers, but they measure a **bug-trained** model. The clean
+  capability number needs a factor=100 re-finetune: `finetune_fixed.sbatch` (legacy masking, for
+  the degradation curve) or `finetune_curriculum.sbatch` (bare-metal regime, for de-novo). See
+  `docs/H200_RUNBOOK.md`.

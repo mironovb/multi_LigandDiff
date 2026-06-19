@@ -36,7 +36,13 @@ echo "Start: $(date)"
 echo "Host: $(hostname)"
 nvidia-smi
 
-CKPT=models/ln_finetuned/ln_finetuned_epoch=48.ckpt
+# !! CHECKPOINT CAVEAT (normalization_factor bug, prompts 19-20) -- read docs/H200_RUNBOOK.md.
+# epoch=48.ckpt stores normalization_factor=1 (warm-start scrambled the factor=100 backbone). It
+# samples self-consistently, so THIS run is valid and apples-to-apples with the old mask-2 point --
+# but it is a BUG-TRAINED model. For the clean degradation curve, first produce a factor=100
+# checkpoint on legacy (uniform) masking (sbatches/finetune_fixed.sbatch) and re-point CKPT.
+CKPT=models/ln_finetuned/ln_finetuned_epoch=48.ckpt   # bug-trained (factor=1); preliminary number
+# CKPT=models/ln_finetuned_fixed/<best>.ckpt          # <- clean factor=100, legacy masking (recommended for the curve)
 OUT=design_test_runs/mask2_${SLURM_JOB_ID}
 
 python -u generate_design_test.py \
