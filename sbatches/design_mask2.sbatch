@@ -16,7 +16,11 @@
 # mask 2 ALONE to completion so 126 -> <mask2> -> 0 -> 0 becomes a measured curve.
 # Uses the charge-aware gate (prompts 01-02) so the count is the fixed-instrument count.
 #
-# n_samples 250 x 10 subsets = 2500 attempts -- comfortably inside one 4 h wall.
+# Sizing: uniform denticity_prior (default) enumerates EVERY eligible partition per masked
+# subset -- mask-2 = C(5,2)=10 subsets, each remaining_cn=4 -> 5 partitions = 50 eligible.
+# So attempts = n_samples x 50.  n_samples 50 -> 2500 attempts == the mask-1 control's load
+# (uniform, 2500, completed), comfortably inside one 4 h wall and count-comparable to mask 1.
+# (n_samples scales attempts x50: 250 would be 12,500 and risk the wall cutoff this run avoids.)
 # nounset trap: do not `set -euo pipefail` + `source ~/.bashrc`.
 
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
@@ -40,7 +44,7 @@ python -u generate_design_test.py \
     --model "$CKPT" \
     --outdir "$OUT" \
     --mask_k 2 \
-    --n_samples 250 \
+    --n_samples 50 \
     --batch_size 32 \
     --resample_r 5 \
     --ligand_sizes random \

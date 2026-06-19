@@ -22,6 +22,8 @@ Usage:
         --reference refs/eu_tmma_cis.xyz \
         --output-csv dft_comparison.csv
 """
+from __future__ import annotations  # PEP 604 unions (`list | None`) run on Py3.9 (cluster ligdiff)
+
 import argparse
 import csv
 import glob
@@ -167,11 +169,14 @@ def select_structures(xtb_dir: str, reference_xyz: str,
         name = row["name"]
         energy = float(row["final_energy_hartree"]) if row.get("final_energy_hartree") else None
 
-        # Find the xyz file
+        # Find the xyz file. Structure names embed brackets (e.g.
+        # "..._[2, 2, 2, 2]_[2]"); glob would read "[...]" as a character class
+        # and never match, so escape the name (glob.escape keeps "**/" intact).
         xyz_path = None
+        ename = glob.escape(name)
         for pattern in [
-            f"{xtb_dir}/**/converged/{name}.xyz",
-            f"{xtb_dir}/**/xtb_work/{name}/xtbopt.xyz",
+            f"{xtb_dir}/**/converged/{ename}.xyz",
+            f"{xtb_dir}/**/xtb_work/{ename}/xtbopt.xyz",
         ]:
             matches = glob.glob(pattern, recursive=True)
             if matches:

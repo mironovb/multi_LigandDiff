@@ -33,8 +33,11 @@ import re
 from collections import Counter, defaultdict
 
 MASK_DIR_RE = re.compile(r'mask(\d+|all)$')
+# attempts=(\d+) is the *eligible* denominator; the honest-denominator change
+# (Prompt 07) appends an optional " (raw N)" between attempts and valid, so tolerate
+# it here or the new summary line silently fails to parse (blank attempts / no yield).
 SUMMARY_RE = re.compile(
-    r'design_test\s+mask_k=(\w+)\s+context=(\S+)\s+attempts=(\d+)\s+valid=(\d+)')
+    r'design_test\s+mask_k=(\w+)\s+context=(\S+)\s+attempts=(\d+)(?:\s+\(raw\s+\d+\))?\s+valid=(\d+)')
 # Older free-text log form: "maskall  context=0/5  attempts=6300  valid=0 ..."
 SUMMARY_RE_ALT = re.compile(
     r'mask(\w+)\s+context=(\S+)\s+attempts=(\d+)\s+valid=(\d+)')
