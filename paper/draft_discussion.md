@@ -63,7 +63,9 @@ rejecting 99.99% of free samples.
 - The mask 2 and mask 3 points come from time-limit-cut-off jobs; a dedicated run is
   needed to pin the exact validity cliff. maskall = 0/6300 is conclusive on its own.
 - Validity here is GFN2-xTB + bond-perception/RDKit. **No DFT validation has been
-  run**; the prepared ORCA PBE0-D3/def2-TZVP protocol is future work.
+  run**; the prepared ORCA PBE0-D4/def2-TZVP protocol (Eu via SARC-DKH-TZVP + SK-MCDHF-RSC
+  ECP, gas-phase) is future work. (Implicit solvent (SMD dodecane) is an OPTIONAL upgrade,
+  not yet implemented in the template.)
 - GFN2-xTB is known to be imperfect for f-block elements (a minority of structures
   raise IEEE exceptions); reported convergence rates should be read in that light.
 

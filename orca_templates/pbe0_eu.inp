@@ -1,4 +1,4 @@
-# PBE0-D4/def2-TZVP with Stuttgart small-core ECP for Eu
+# PBE0-D4/def2-TZVP; Eu: SARC-DKH-TZVP basis + SK-MCDHF-RSC small-core ECP; gas phase (no implicit solvent)
 # Neutral Eu(III) complex: charge=0, mult=7 (4f^6, S=3)
 #
 # Substitution tokens (replaced by dft_pipeline.py):

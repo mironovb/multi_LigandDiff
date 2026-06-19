@@ -16,8 +16,9 @@ shell donors were identified as atoms within 2.8 Å of the Ln center (in code th
 the molSimplify covalent-radii rule shared with the validity gate, `src/bonding.py`,
 which gives 2.78–2.81 Å for the dominant Ln–O/N donors — matching this figure; an
 earlier flat 3.0 Å prep cutoff was retired as it inflated the CN 9/10 tail, Finding 6);
-ligands were obtained by building a covalent-bond graph (1.3× the sum of covalent radii),
-removing the Ln node, and taking connected components containing at least one donor.
+ligands were obtained by building a covalent-bond graph (the shared molSimplify
+covalent-radii rule, ~1.15× the sum of covalent radii, `src/bonding.py`), removing the
+Ln node, and taking connected components containing at least one donor.
 
 Filtering to training candidates (mononuclear; molecular; CN ∈ {7,8,9,10}; all
 non-Ln elements in {C,N,O,F,P,S,Cl,Br}) yielded **9,306 training complexes** (6,563

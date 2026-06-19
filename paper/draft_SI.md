@@ -7,7 +7,7 @@ _All numbers below are log-traceable; job IDs refer to the cluster runs of recor
 Custom pipeline (pymatgen + ASE; no CSD API license available). Stages: parse 53,333
 Ln-containing CIFs (CSD v5.46) → remove disorder/polymeric → **31,979 mononuclear
 molecular complexes** → first-shell donors within 2.8 Å of Ln → covalent-graph ligand
-decomposition (1.3× sum of covalent radii) → filter (mononuclear, molecular,
+decomposition (molSimplify covalent-radii rule, ~1.15× sum of covalent radii) → filter (mononuclear, molecular,
 CN ∈ {7,8,9,10}, non-Ln elements ∈ {C,N,O,F,P,S,Cl,Br}) → **9,306 training complexes**
 (6,563 O/N-donor only). Ligand inventory: 216,509 coordinating instances, 54,946 unique
 SMILES.
