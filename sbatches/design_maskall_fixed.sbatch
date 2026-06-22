@@ -15,7 +15,7 @@
 # incapacity from instrument brittleness:
 #   - charge-aware validity gate           (prompts 01-02)  -> nitrate can pass
 #   - per-reason rejection_summary.json     (prompt 03)      -> see WHERE attempts die
-#   - denticity cap <=4 + CSD prior         (prompts 05-07)  -> honest denominator
+#   - denticity cap <=4, eligible-only enum  (prompts 05-07)  -> honest denominator
 #   - donor-identity / composition spec     (prompts 08-10)  -> well-posed target
 #   - projection above bond cutoff + gen<->gen (prompts 11-13) -> active in bare-metal
 #   - valence-aware type masking            (prompt 16)      -> N cannot take 4 neighbours
@@ -49,17 +49,25 @@ CKPT=models/ln_finetuned/ln_finetuned_epoch=48.ckpt   # bug-trained (factor=1); 
 # CKPT=models/ln_finetuned_curriculum/<best>.ckpt     # <- clean factor=100 + bare-metal curriculum (recommended)
 OUT=design_test_runs/maskall_fixed_${SLURM_JOB_ID}
 
+# ATTEMPT COUNT (statistical power) = n_samples x partitions-per-subset; maskall has n_subsets=1:
+#   uniform -> n_samples x 23 eligible CN=10 partitions  (274 x 23 = 6302 == the old run's power, POSSIBLE targets only)
+#   csd     -> n_samples x 1 sampled partition/seed       (the earlier csd run did only 150 -> 42x under-powered!)
+# Why it matters: at a 0.08% true yield, P(observe 0 valid) ~= 89% at n=150 but ~0.6% at n=6300. A low/zero
+# yield is only meaningful at thousands of attempts. uniform/274 restores the old run's power on capped targets.
+# Realistic-target alternative (same power, concentrates on likely partitions): --n_samples 6000 --denticity_prior csd
+# WALL CHECK: 6302 attempts ~= 42x the 150-run; `sacct -j <150-run jid> --format=Elapsed` -- if it took >5 min,
+# drop to --n_samples 137 (~3150 attempts, still ~95% power at a 0.1% yield) to stay under the 4 h wall.
 python -u generate_design_test.py \
     --complex eu_tmma_cis.xyz \
     --model "$CKPT" \
     --outdir "$OUT" \
     --mask_k all \
-    --n_samples 150 \
+    --n_samples 274 \
     --batch_size 32 \
     --resample_r 5 \
     --ligand_sizes random \
     --max_denticity 4 \
-    --denticity_prior csd \
+    --denticity_prior uniform \
     --project_enabled True \
     --d_min_start 2.2 \
     --d_min_end 1.9 \

@@ -84,8 +84,11 @@ python rescore_validity.py --reference eu_tmma_cis.xyz \
 ```
 
 ### How to read it
-- **valid > 0** on maskall → part of the old `0/6300` was the *instrument*. Report `valid/150`
-  (eligible) **and** `valid/6300` (raw, for the old comparison; `accounting.json` keeps both).
+- **valid > 0** on maskall → part of the old `0/6300` was the *instrument*. Report `valid/attempts_eligible`
+  (≈6302 now that the sbatch is power-matched to the old run) **and** the raw count (`accounting.json` keeps both).
+  NOTE: a low/zero maskall yield is only meaningful at thousands of attempts — at a 0.08% true yield, n=150 shows
+  0 ~89% of the time. The sbatch's ATTEMPT COUNT note explains the `n_samples × partitions` math; don't read a 0
+  from a few-hundred-attempt run as "de-novo fails."
 - **valid = 0** → a rigorous zero **for a bug-trained model** — it does not exonerate the model;
   the clean number needs the §5 re-finetune.
 - **Rejection breakdown:** the key signal is whether failures moved **off** the silent geometric
